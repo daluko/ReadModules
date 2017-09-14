@@ -1,0 +1,11 @@
+{
+  "PluginName": "Optical Character Recognition",
+  "Tagline": "Optical Character Recognition Plugin",
+  "Description": "Applies optical character recognition based on Google's Teeseract engine on an image.",
+  "AuthorName": "David Koerner",
+  "Company": "TU Wien",
+  "DateCreated": "2017-09-04",
+  "DateModified": "2017-09-04",
+  "PluginId": "4f1782f7459c4e62a8adb4b9d84dcd32",
+  "Version": "0.0.1"
+}

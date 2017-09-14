@@ -1,0 +1,78 @@
+
+PROJECT(TesseractOCR)
+
+IF(EXISTS ${CMAKE_SOURCE_DIR}/CMakeUser.txt)
+	include(${CMAKE_SOURCE_DIR}/CMakeUser.txt)
+ENDIF()
+
+# include macros needed
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/Utils.cmake")
+
+if (NOT BUILDING_MULTIPLE_PLUGINS)
+	# prepare plugin
+	RDM_PREPARE_PLUGIN()
+	
+	# locate the READ framework
+	RDM_FIND_RDF()
+	
+	# find the Qt
+	RDM_FIND_QT()
+	
+	# OpenCV
+	RDM_FIND_OPENCV()
+endif()
+
+include_directories ( 
+	${QT_INCLUDES}
+	${OpenCV_INCLUDE_DIRS}
+	${CMAKE_CURRENT_BINARY_DIR}
+	${NOMACS_INCLUDE_DIRECTORY}
+	${RDF_INCLUDE_DIRECTORY}
+ )
+
+file(GLOB PLUGIN_SOURCES "src/*.cpp")
+file(GLOB PLUGIN_HEADERS "src/*.h" "${NOMACS_INCLUDE_DIRECTORY}/DkPluginInterface.h")
+file(GLOB PLUGIN_JSON "src/*.json")
+
+# uncomment if you want to add the plugin version or id
+# add_definitions(-DPLUGIN_VERSION="${PLUGIN_VERSION}")
+# add_definitions(-DPLUGIN_ID="${PLUGIN_ID}")
+
+set (PLUGIN_RESOURCES
+${PROJECT_NAME}.qrc
+ )
+ADD_DEFINITIONS(${QT_DEFINITIONS})
+ADD_DEFINITIONS(-DQT_PLUGIN)
+ADD_DEFINITIONS(-DQT_SHARED)
+ADD_DEFINITIONS(-DQT_DLL)
+
+QT5_ADD_RESOURCES(PLUGIN_RCC ${PLUGIN_RESOURCES})
+
+link_directories(${OpenCV_LIBRARY_DIRS} ${NOMACS_BUILD_DIRECTORY}/$<CONFIGURATION> ${NOMACS_BUILD_DIRECTORY}/libs ${NOMACS_BUILD_DIRECTORY} ${RDF_BUILD_DIRECTORY})
+ADD_LIBRARY(${PROJECT_NAME} SHARED ${PLUGIN_SOURCES} ${PLUGIN_MOC_SRC} ${PLUGIN_RCC} ${PLUGIN_HEADERS})	
+target_link_libraries(${PROJECT_NAME} ${QT_QTCORE_LIBRARY} ${QT_QTGUI_LIBRARY} ${QT_QTNETWORK_LIBRARY} ${QT_QTMAIN_LIBRARY} ${OpenCV_LIBS} ${NOMACS_LIBS} ${RDF_LIBS})
+
+################################################################################
+# tesseract cmake section - build and link dependencies using cppan
+
+# Output directory settings
+set(output_dir ${NOMACS_BUILD_DIRECTORY})
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${output_dir})
+
+add_subdirectory(.cppan)
+
+#link tesseract libraries generarted by cppan
+target_link_libraries(${PROJECT_NAME}
+    pvt.cppan.demo.google.tesseract.libtesseract
+    pvt.cppan.demo.danbloomberg.leptonica
+)
+
+#message(STATUS "${PROJECT_NAME} \t v${PLUGIN_VERSION} \t - tess dlls will be installed to: ${NOMACS_BUILD_DIRECTORY}")
+################################################################################
+
+source_group("Generated Files" FILES ${RDF_RC} ${RDF_QM} ${RDF_AUTOMOC})
+
+RDM_CREATE_TARGETS()
+RDM_GENERATE_USER_FILE()
+
+qt5_use_modules(${PROJECT_NAME} Widgets Gui Network LinguistTools PrintSupport Concurrent)
