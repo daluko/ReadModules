@@ -19,6 +19,7 @@ OPTION (ENABLE_FORMS "Form Analysis Plugin" ON)
 OPTION (ENABLE_WRITERIDENTIFICATION "Compile Writer Identification plugin" OFF)
 OPTION (ENABLE_READ_CONFIG "Configuration Plugin" ON)
 OPTION (ENABLE_BATCH_TEST "Test plugin for new batch interface" OFF)
+OPTION (ENABLE_TESSERACT_OCR "Tesseract Optical Character Recognition Plugin" OFF)
 
 RDM_PREPARE_PLUGIN()
 
@@ -80,4 +81,6 @@ IF (ENABLE_READ_CONFIG)
 	add_subdirectory(Modules/ReadConfig)
 ENDIF()
 
-
+IF (ENABLE_TESSERACT_OCR)
+	add_subdirectory(Modules/TesseractOCR)
+ENDIF()
