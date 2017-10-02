@@ -21,7 +21,7 @@ cppan
 4. Hit Configure then Generate
 5. Open the ReadFramework.sln
 6. Right-click the TesseractOCR project and choose Set as StartUp Project
-7. Compile the Solution
+7. Compile the Solution (make sure to build cppan targets - needed to copy tesseract dependencies)
 
 ## Running the module
 

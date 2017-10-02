@@ -103,8 +103,7 @@ public:
 	void saveSettings(QSettings& settings) const override;
 
 	enum {
-		id_ocr_image,
-		id_ocr_page,
+		id_perform_ocr,
 		// add actions here
 
 		id_end
@@ -120,14 +119,13 @@ protected:
 	QString mModuleName;
 
 	tesseract::TessBaseAPI* initTesseract() const;
-	QSharedPointer<rdf::PageElement> createOutputPAGE(
-		rdf::PageXmlParser, 
-		QSharedPointer<nmc::DkImageContainer>) const;
 	void performOCR(tesseract::TessBaseAPI*, QImage) const;
-	QSharedPointer<rdf::PageElement> saveOCRtoPAGE(
-		tesseract::TessBaseAPI*, 
-		QSharedPointer<rdf::PageElement>) const;
-	void addOCRtoPAGE() const;
-
+	QSharedPointer<rdf::PageElement> saveResultsToXML(tesseract::TessBaseAPI*, QSharedPointer<rdf::PageElement>) const;
+	void addTextToXML(QImage& img, QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const;
+	QVector<rdf::Rect> TesseractOCR::getOCRBoxes(QSize& imgSize, QVector<QSharedPointer<rdf::Region>> tRegions) const;
+	rdf::Rect polygonToOCRBox(QSize imgSize, rdf::Polygon poly) const;
+	QVector<rdf::Rect> mergeOverlappingBoxes(QVector<rdf::Rect> tBoxes) const;
+	void TesseractOCR::processRectResults(tesseract::TessBaseAPI* tessAPI, rdf::Rect b, QVector<QSharedPointer<rdf::Region>> tRegions, QVector<rdf::Rect> tBoxes) const;
+	void writeTextToRegions(char* lineText, rdf::Rect lineRect, QVector<QSharedPointer<rdf::Region>>& tRegions, QVector<rdf::Rect> tBoxes) const;
 };
 };

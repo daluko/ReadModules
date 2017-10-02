@@ -38,13 +38,18 @@ related links:
 
 #include "Settings.h"
 
-// read framework
+// ReadFramework
 #include "PageParser.h"
 #include "Shapes.h"
-
+#include "Utils.h"
 
 //tesseract
 #include <allheaders.h> // leptonica main header for image io
+
+// openCV
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/highgui.hpp>
 
 #pragma warning(push, 0)	// no warnings from includes - begin
 #include <QAction>
@@ -72,16 +77,14 @@ TesseractOCR::TesseractOCR(QObject* parent) : QObject(parent) {
 	QVector<QString> menuNames;
 	menuNames.resize(id_end);
 
-	menuNames[id_ocr_image] = tr("OCR of current image");
-	menuNames[id_ocr_page] = tr("OCR using given segmentation");
+	menuNames[id_perform_ocr] = tr("perform OCR on current image");
 	mMenuNames = menuNames.toList();
 
 	// create menu status tips
 	QVector<QString> statusTips;
 	statusTips.resize(id_end);
 
-	statusTips[id_ocr_image] = tr("Computes optical character recognition results for an image and saves them as PAGE xml file.");
-	statusTips[id_ocr_page] = tr("Computes optical character recognition results for provided segmentation (PAGE file) and image.");
+	statusTips[id_perform_ocr] = tr("Computes optical character recognition results for an image and saves them as a PAGE xml file.");
 	mMenuStatusTips = statusTips.toList();
 
 	// this line adds the settings to the config
@@ -144,66 +147,62 @@ QSharedPointer<nmc::DkImageContainer> TesseractOCR::runPlugin(
 		return imgC;
 
 
-	if (runID == mRunIDs[id_ocr_image]) {
-
-		qInfo() << "image ocr to PAGE xml";
+	if (runID == mRunIDs[id_perform_ocr]) {
 
 		auto img = imgC->image();
+		cv::Mat imgCv = nmc::DkImage::qImage2Mat(imgC->image());
+
+		// load existing XML or create new one
+		QString loadXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath());
+		rdf::PageXmlParser parser;
+		bool xml_found = parser.read(loadXmlPath);
+
+		// set xml header info
+		auto xmlPage = parser.page();
+		xmlPage->setCreator(QString("CVL"));
+		xmlPage->setImageSize(QSize(img.size()));
+		xmlPage->setImageFileName(imgC->fileName());
 
 		// Init Tesseract API
 		tesseract::TessBaseAPI* tessAPI = initTesseract();	//fixed path, only english
+
 		if (!tessAPI) {	//init failed
 			return imgC;
 		}
-		// Prepare PAGE xml output
-		rdf::PageXmlParser parser;
-		auto xmlPage = createOutputPAGE(parser, imgC);
 		
-		//compute tesseract OCR results
-		performOCR(tessAPI, imgC->image());
-		
-		saveOCRtoPAGE(tessAPI, xmlPage);
+		if (!xml_found) {
+
+			qInfo() << "OCR on current image";
+
+			//compute tesseract OCR results
+			performOCR(tessAPI, img);
+			saveResultsToXML(tessAPI, xmlPage);
+		}
+		else {
+			
+			qInfo() << "OCR on current image - using existing PAGE xml";
+			addTextToXML(img, xmlPage, tessAPI);
+		}
 		
 		// save xml output
-		//QString saveXmlPath = QDir::currentPath() + "/xml/output.xml";
 		QString saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
 		parser.write(saveXmlPath, xmlPage);
 
 		// close tesseract api
 		tessAPI->End();
-
-		
-		//alternative output format, just an idea
-		//tesseract::TessPDFRenderer pdfR = new tesseract::TessPDFRenderer(outputbase, api->GetDatapath(), textonly));
-
-		return imgC;
-
-	}
-	else if (runID == mRunIDs[id_ocr_page]) {
-
-		qDebug() << "OCR on PAGE file";
-
-		QString inputXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath(), "gt");
-		rdf::PageXmlParser parser;
-		parser.read(inputXmlPath);
-
-		addOCRtoPAGE();
-
-		return imgC;
 	}
 
 	// wrong runID? - do nothing
 	return imgC;
 }
 
-// OCR & PAGE functions------------------------------------------------------------------------------
+// OCR related functions------------------------------------------------------------------------------
 tesseract::TessBaseAPI* TesseractOCR::initTesseract() const{
 	
 	tesseract::TessBaseAPI* tessAPI = new tesseract::TessBaseAPI();
 
 	//TO DO detailed warnings/error messages
 	//TO DO allow setting different languages
-	//TO DO fix call to tessdataDir path 
 
 	//qWarning() << mConfig.TessdataDir();
 	//if (tessAPI->Init((QDir::currentPath()).toStdString().c_str(), "eng"))
@@ -221,22 +220,6 @@ tesseract::TessBaseAPI* TesseractOCR::initTesseract() const{
 	return tessAPI;
 }
 
-QSharedPointer<rdf::PageElement> TesseractOCR::createOutputPAGE(
-	rdf::PageXmlParser parser, 
-	QSharedPointer<nmc::DkImageContainer> imgC) const{
-
-	//auto xmlPage = parser.page();
-	parser.setPage(parser.page().create());
-	auto xmlPage = parser.page();
-
-											// set our header info
-	xmlPage->setCreator(QString("CVL"));
-	xmlPage->setImageSize(QSize(imgC->image().size()));
-	xmlPage->setImageFileName(imgC->fileName());
-
-	return xmlPage;
-}
-
 void TesseractOCR::performOCR(tesseract::TessBaseAPI* tessAPI, QImage img) const{
 
 	//TO DO allow setting different segmentation modes
@@ -248,7 +231,7 @@ void TesseractOCR::performOCR(tesseract::TessBaseAPI* tessAPI, QImage img) const
 
 }
 
-QSharedPointer<rdf::PageElement> TesseractOCR::saveOCRtoPAGE(
+QSharedPointer<rdf::PageElement> TesseractOCR::saveResultsToXML(
 	tesseract::TessBaseAPI* tessAPI, 
 	QSharedPointer<rdf::PageElement> xmlPage) const{
 
@@ -392,11 +375,193 @@ QSharedPointer<rdf::PageElement> TesseractOCR::saveOCRtoPAGE(
 	return xmlPage;
 }
 
-void TesseractOCR::addOCRtoPAGE() const {
+void TesseractOCR::addTextToXML(QImage& img, QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const {
+	
+	// TODO check if ocr result rect > rect for reccognition is caused by my code
+	// TODO best value/method for padding of text boxes for OCR
+	// TODO use different OCR modes or variables to tune OCR results
 
-	//TODO
+	rdf::Timer dt;
+	
+	tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
+	//tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_SINGLE_WORD); //alternative mode
+	tessAPI->SetVariable("save_best_choices", "T");
+	tessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
+
+	// get text regions from existing xml (type_text_region + type_text_line)
+	QVector<QSharedPointer<rdf::Region>> tRegions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_region);
+	tRegions = tRegions + rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_line);
+	
+	//get boxes representing OCR regions
+	QVector<rdf::Rect> tBoxes = getOCRBoxes(img.size(), tRegions);
+
+	// merge overlapping regions - avoid misclassification and double recognition
+	QVector<rdf::Rect> oBoxes = tBoxes;
+	oBoxes = mergeOverlappingBoxes(oBoxes);
+
+	// compute OCR results and add them to the corresponding text regions
+	for (auto b : oBoxes) {
+
+		if (b.isNull()) {
+			continue;
+		}
+
+		// set up and apply tesseract
+		tessAPI->SetRectangle((int)b.topLeft().x(), (int)b.topLeft().y(), (int)b.width(), (int)b.height());
+		tessAPI->Recognize(0);
+
+		//debug ocr images
+		//cv::Mat src = nmc::DkImage::qImage2Mat(img);
+		//cv::Mat trImg = cv::Mat(src, b.toCvRect());
+		//cv::String winName = "image of text region ";
+		//winName = winName + std::to_string(tBoxes.indexOf(b));
+		//cv::namedWindow(winName, cv::WINDOW_AUTOSIZE);// Create a window for display.
+		//cv::imshow(winName, trImg);
+
+		//iterate through result data and save to text regions
+		processRectResults(tessAPI, b, tRegions, tBoxes);
+	}
+	
+	//for (auto r : tRegions) {
+	//	xmlPage->rootRegion()->addUniqueChild(r);
+	//}
+
+	//qInfo() << "There are " << tBoxes.size() << " text regions in the XML";
+	qInfo() << "ocr results computed in" << dt;
 
 }
+
+
+// get boxes representing text regions where OCR should be applied
+QVector<rdf::Rect> TesseractOCR::getOCRBoxes(QSize& imgSize, QVector<QSharedPointer<rdf::Region>> tRegions) const {
+	
+	QVector<rdf::Rect> tBoxes = QVector<rdf::Rect>(tRegions.size());
+	for (int i = 0; i < tRegions.size(); ++i) {
+		auto r = tRegions[i];
+		if (r->type() == rdf::Region::type_text_region) {
+			auto trc = qSharedPointerCast<rdf::TextRegion>(r);
+			if (trc && !trc->polygon().isEmpty() && trc->text().isEmpty()) {
+				rdf::Rect tmp = polygonToOCRBox(imgSize, trc->polygon());
+				tBoxes[i] = tmp;
+			}
+		}
+		else {
+			auto trc = qSharedPointerCast<rdf::TextLine>(r);
+			if (trc && !trc->polygon().isEmpty() && trc->text().isEmpty()) {
+				rdf::Rect tmp = polygonToOCRBox(imgSize, trc->polygon());
+				tBoxes[i] = tmp;
+			}
+		}
+	}
+
+	return tBoxes;
+}
+
+rdf::Rect TesseractOCR::polygonToOCRBox(QSize imgSize, rdf::Polygon poly) const {
+
+	rdf::Rect tmp = rdf::Rect::fromPoints(poly.toPoints());
+	tmp.expand(10); // expanding image improves OCR results - avoids errors if text is connected to the image border
+	tmp = tmp.clipped(rdf::Vector2D(imgSize));
+
+	return tmp;
+}
+
+QVector<rdf::Rect> TesseractOCR::mergeOverlappingBoxes(QVector<rdf::Rect> boxes) const {
+
+	for (int i = 0; i < boxes.size(); ++i) {
+		for (int j = 0; j < boxes.size(); ++j) {
+			if (i == j) { continue; }
+			if (boxes[i].intersects(boxes[j])) {
+				//qInfo() << "joining : " << boxes[i].toString() << "and" << boxes[j].toString();
+				boxes[i] = boxes[i].joined(boxes[j]);
+				boxes.remove(j);
+
+				return mergeOverlappingBoxes(boxes);
+			}
+		}
+	}
+	return boxes;
+}
+
+void TesseractOCR::processRectResults(tesseract::TessBaseAPI* tessAPI, 
+	rdf::Rect b, QVector<QSharedPointer<rdf::Region>> tRegions, QVector<rdf::Rect> tBoxes) const{
+
+	tesseract::ResultIterator* ri = tessAPI->GetIterator();
+
+	if (ri != 0) {
+		while (!ri->Empty(tesseract::RIL_BLOCK)) {
+
+			//processing only text blocks
+			if (PTIsTextType(ri->BlockType())) {
+
+				//line level processing
+				if (ri->IsAtBeginningOf(tesseract::RIL_TEXTLINE)) {
+
+					// get line text
+					char* lineText = ri->GetUTF8Text(tesseract::RIL_TEXTLINE);
+
+					// get bb of current text line
+					int x1, y1, x2, y2;
+					ri->BoundingBox(tesseract::RIL_TEXTLINE, &x1, &y1, &x2, &y2);
+					rdf::Rect lr(QRect(QPoint((double)x1, (double)y1), QPoint((double)x2, (double)y2)));
+
+					// make sure that the result rect created is smaller than actual ROI
+					if (!b.contains(lr)) {
+						lr = lr.intersected(b);
+					}
+
+					//save OCR results to text region
+					writeTextToRegions(lineText, lr, tRegions, tBoxes);
+
+					ri->Next(tesseract::RIL_TEXTLINE);
+				}
+				else {
+					ri->Next(tesseract::RIL_TEXTLINE);
+					continue;
+				}
+			}
+			else {
+				// non-text block processing
+				ri->Next(tesseract::RIL_TEXTLINE); //move on to next non-text region, RIL_SYMBOL skips non-text 
+			}
+		}
+	}
+
+}
+void TesseractOCR::writeTextToRegions(char* lineText, rdf::Rect lineRect, 
+	QVector<QSharedPointer<rdf::Region>>& tRegions, QVector<rdf::Rect> tBoxes) const {
+	int rIdx = -1;
+	
+	for (int i = 0; i < tRegions.size(); ++i) {
+		if (tBoxes[i].contains(lineRect)) {
+			if (rIdx == -1) {
+				rIdx = i;
+			}
+			else {
+				if (tBoxes[rIdx].area() > tBoxes[i].area())
+					rIdx = i;
+			}
+		}
+	}
+	
+	if(rIdx!=-1){
+		auto r = tRegions[rIdx];
+		if (r->type() == rdf::Region::type_text_region) {
+			auto rc = qSharedPointerCast<rdf::TextRegion>(r);
+			rc->setText(rc->text() + QString::fromUtf8(lineText));
+			tRegions[rIdx] = rc;
+		}
+		else {
+			auto rc = qSharedPointerCast<rdf::TextLine>(r);
+			rc->setText(rc->text() + QString::fromUtf8(lineText));
+			tRegions[rIdx] = rc;
+		}	
+	}
+	else {
+		qWarning() << "Could not find text region for OCR results";
+	}
+}
+
 
 // plugin functions----------------------------------------------------------------------------------
 void TesseractOCR::preLoadPlugin() const {
