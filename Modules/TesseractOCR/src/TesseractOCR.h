@@ -54,41 +54,57 @@ namespace rdf {
 
 namespace rdm {
 
-	class TesseractOCRConfig : public rdf::ModuleConfig {
+	class TesseractPluginConfig : public rdf::ModuleConfig {
 
-	public:
-		TesseractOCRConfig();
+		public:
+			TesseractPluginConfig();
 
-		virtual QString toString() const override;
+			virtual QString toString() const override;
 
-		QString TessdataDir() const;
-		void setTessdataDir(QString dir);
+			QString TessdataDir() const;
+			//void setTessdataDir(QString dir);
 
-		int textLevel() const;
-		void setTextLevel(int level);
+			int textLevel() const;
+			//void setTextLevel(int level);
 
-		bool drawResults() const;
-		void setDrawResults(bool draw);
+			bool drawResults() const;
+			//void setDrawResults(bool draw);
 
-	private:
+		private:
 
-		QString mTessdataDir = QString("E:\\dev\\CVL\\ReadModules\\ReadModules\\Modules\\TesseractOCR");
-		int mTextLevel = 1;
-		bool mDrawResults = false;
+			QString mTessdataDir = QString("E:\\dev\\CVL\\ReadModules\\ReadModules\\Modules\\TesseractOCR");
+			int mTextLevel = 2;
+			bool mDrawResults = false;
 
-		void load(const QSettings& settings) override;
-		void save(QSettings& settings) const override;
+			void load(const QSettings& settings) override;
+			void save(QSettings& settings) const override;
+	};
+
+	class TesseractEngine {
+
+		public:
+			TesseractEngine();
+			~TesseractEngine();
+
+			bool init(const QString tessdataDir);
+			tesseract::ResultIterator* processPage(const QImage img);
+			tesseract::TessBaseAPI* tessAPI();
+
+		private:
+			tesseract::TessBaseAPI* mTessAPI;
+			void setImage(const QImage img);
+			void setTessVariables(const tesseract::PageSegMode psm);
 	};
 
 
-	class TesseractOCR : public QObject, nmc::DkBatchPluginInterface {
+	class TesseractPlugin : public QObject, nmc::DkBatchPluginInterface {
 		Q_OBJECT
 			Q_INTERFACES(nmc::DkBatchPluginInterface)
 			Q_PLUGIN_METADATA(IID "com.nomacs.ImageLounge.TesseractOCR/3.2" FILE "TesseractOCR.json")
 
 	public:
-		TesseractOCR(QObject* parent = 0);
-		~TesseractOCR();
+		TesseractPlugin(QObject* parent = 0);
+		~TesseractPlugin();
 
 		QImage image() const override;
 
@@ -110,8 +126,6 @@ namespace rdm {
 
 		enum {
 			id_perform_ocr,
-			// add actions here
-
 			id_end
 		};
 
@@ -121,22 +135,22 @@ namespace rdm {
 		QStringList mMenuNames;
 		QStringList mMenuStatusTips;
 
-		TesseractOCRConfig mConfig;
+		TesseractPluginConfig mConfig;
 		QString mModuleName;
 
 		tesseract::TessBaseAPI* initTesseract() const;
 		void setUpOCR(const QImage img, tesseract::TessBaseAPI* tessAPI) const;
 
-		void saveResultsToXML(tesseract::TessBaseAPI* tessAPI, const QSharedPointer<rdf::PageElement> xmlPage) const;
+		void convertPageResults(tesseract::ResultIterator * ri, const QSharedPointer<rdf::PageElement> xmlPage) const;
 		QImage addTextToXML(QImage img, const QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const;
 
-		void processTextRegions(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const;
+		void convertRegion(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const;
 		QSharedPointer<rdf::TextRegion> createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel level, const tesseract::PageIteratorLevel outputLevel) const;
 		QSharedPointer<rdf::TextLine> createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel) const;
 
 		void processRectResults(const rdf::Rect box, const QVector<rdf::Rect> tBoxes, tesseract::TessBaseAPI* tessAPI, QVector<QSharedPointer<rdf::Region>> tRegions) const;
 		void writeTextToRegions(const char* lineText, const rdf::Rect lineRect, const QVector<rdf::Rect> tBoxes, QVector<QSharedPointer<rdf::Region>>& tRegions) const;
-		QVector<rdf::Rect> TesseractOCR::getOCRBoxes(const QSize imgSize, const QVector<QSharedPointer<rdf::Region>> tRegions) const;
+		QVector<rdf::Rect> getOCRBoxes(const QSize imgSize, const QVector<QSharedPointer<rdf::Region>> tRegions) const;
 		rdf::Rect polygonToOCRBox(QSize imgSize, rdf::Polygon poly) const;
 		QVector<rdf::Rect> mergeOverlappingBoxes(QVector<rdf::Rect> tBoxes) const;
 	};

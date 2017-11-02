@@ -66,7 +66,7 @@ namespace rdm {
 /**
 *	Constructor
 **/
-TesseractOCR::TesseractOCR(QObject* parent) : QObject(parent) {
+TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 
 	// create run IDs
 	QVector<QString> runIds;
@@ -101,7 +101,7 @@ TesseractOCR::TesseractOCR(QObject* parent) : QObject(parent) {
 /**
 *	Destructor
 **/
-TesseractOCR::~TesseractOCR() {
+TesseractPlugin::~TesseractPlugin() {
 
 	qDebug() << "destroying tesseract plugin...";
 }
@@ -110,12 +110,12 @@ TesseractOCR::~TesseractOCR() {
 * Returns descriptive iamge for every ID
 * @param plugin ID
 **/
-QImage TesseractOCR::image() const {
+QImage TesseractPlugin::image() const {
 
 	return QImage(":/TesseractOCR/img/read.png");
 };
 
-QList<QAction*> TesseractOCR::createActions(QWidget* parent) {
+QList<QAction*> TesseractPlugin::createActions(QWidget* parent) {
 
 	if (mActions.empty()) {
 
@@ -132,7 +132,7 @@ QList<QAction*> TesseractOCR::createActions(QWidget* parent) {
 }
 
 
-QList<QAction*> TesseractOCR::pluginActions() const {
+QList<QAction*> TesseractPlugin::pluginActions() const {
 	return mActions;
 }
 
@@ -141,7 +141,7 @@ QList<QAction*> TesseractOCR::pluginActions() const {
 * @param plugin ID
 * @param image to be processed
 **/
-QSharedPointer<nmc::DkImageContainer> TesseractOCR::runPlugin(
+QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 	const QString &runID,
 	QSharedPointer<nmc::DkImageContainer> imgC,
 	const nmc::DkSaveInfo& saveInfo,
@@ -153,8 +153,8 @@ QSharedPointer<nmc::DkImageContainer> TesseractOCR::runPlugin(
 
 	if (runID == mRunIDs[id_perform_ocr]) {
 
-		auto img = imgC->image();
-		cv::Mat imgCv = nmc::DkImage::qImage2Mat(imgC->image());
+		//get currrent image
+		QImage img = imgC->image();
 
 		// load existing XML or create new one
 		QString loadXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath());
@@ -167,37 +167,42 @@ QSharedPointer<nmc::DkImageContainer> TesseractOCR::runPlugin(
 		xmlPage->setImageSize(QSize(img.size()));
 		xmlPage->setImageFileName(imgC->fileName());
 
-		// Init Tesseract API
-		tesseract::TessBaseAPI* tessAPI = initTesseract();	//only english
+		// init tesseract
+		TesseractEngine tessEngine;
+		bool initialized = tessEngine.init(mConfig.TessdataDir());
 
-		if (!tessAPI) {	//init failed
+		if (!initialized) {
 			return imgC;
 		}
 
-		setUpOCR(img, tessAPI);
+		// TODO remove after refactoring xml processing
+		tesseract::TessBaseAPI* tessAPI = tessEngine.tessAPI();
 		
 		if (!xml_found) {
 
-			qInfo() << "OCR on current image";
+			qInfo() << "Tesseract plugin: OCR on current image";
 
 			// compute tesseract OCR results
-			tessAPI->Recognize(0);
+			tesseract::ResultIterator* pageResults;
+			pageResults = tessEngine.processPage(img);
 
-			// save results
-			saveResultsToXML(tessAPI, xmlPage);
+			// convert results to PAGE xml regions
+			convertPageResults(pageResults, xmlPage);
 		}
 		else {
 			
-			qInfo() << "OCR on current image - using existing PAGE xml";
+			// TODO remove after refactoring xml processing
+			setUpOCR(img, tessAPI);
+
+			qInfo() << "Tesseract plugin: OCR on current image - using existing PAGE xml";
 
 			// add OCR results to xml file
 			QImage result = addTextToXML(img, xmlPage, tessAPI);
 
 			// drawing result boxes
-
 			if (mConfig.drawResults()) {
 
-				qDebug() << "Drawing OCR boxes that have been recognized.";
+				qDebug() << "Tesseract plugin: Drawing OCR boxes that have been recognized.";
 				imgC->setImage(result, "OCR boxes");
 
 			}
@@ -216,159 +221,32 @@ QSharedPointer<nmc::DkImageContainer> TesseractOCR::runPlugin(
 }
 
 // OCR related functions------------------------------------------------------------------------------
-tesseract::TessBaseAPI* TesseractOCR::initTesseract() const{
-	
-	tesseract::TessBaseAPI* tessAPI = new tesseract::TessBaseAPI();
 
-	//TO DO detailed warnings/error messages
-	//TO DO allow setting different languages
+void TesseractPlugin::convertPageResults(tesseract::ResultIterator* pageResults, const QSharedPointer<rdf::PageElement> xmlPage) const {
 
-	//qWarning() << mConfig.TessdataDir();
-	//if (tessAPI->Init((QDir::currentPath()).toStdString().c_str(), "eng"))
-	if (tessAPI->Init(mConfig.TessdataDir().toStdString().c_str(), "eng"))
-	{
-		qWarning() << "Tesseract OCR: Could not initialize tesseract API!";
-		qWarning() << "Set path to directory containing \"tessdata\" folder using config plugin!";
-		qWarning() << "If tessdata folder is missing, create it and download eng.traineddata from github https:\\\\github.com\\tesseract-ocr\\tessdata";
-		return NULL;
-	}
-	else {
-		qInfo() << "Tesseract OCR: Initialized tesseract API.";
-		qInfo() << "Tesseract OCR: tesseract version: " << tessAPI->Version();
+	int ol = mConfig.textLevel();
+
+	if (ol < 0 || ol>3) {
+		ol = 1;
+		qWarning() << "Tesseract plugin: TextLevel has to be an Integer from 0-3: 0(block), 1(paragraph), 2(line), 3(word))";
+		qInfo() << "Tesseract plugin: TextLevel set to 1.";
 	}
 
-	return tessAPI;
+	tesseract::PageIteratorLevel outputLevel = static_cast<tesseract::PageIteratorLevel>(ol);
+	tesseract::PageIteratorLevel currentLevel = tesseract::RIL_BLOCK;
+
+	convertRegion(currentLevel, outputLevel, pageResults, xmlPage->rootRegion());
 }
 
-void TesseractOCR::setUpOCR(const QImage img, tesseract::TessBaseAPI* tessAPI) const {
+void TesseractPlugin::convertRegion(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const {
 
-	//tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_SINGLE_WORD); //alternative mode
-
-	tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
-	tessAPI->SetVariable("save_best_choices", "T");
-	tessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
-}
-
-void TesseractOCR::saveResultsToXML(tesseract::TessBaseAPI* tessAPI, const QSharedPointer<rdf::PageElement> xmlPage) const{
-
-	tesseract::ResultIterator* ri = tessAPI->GetIterator();
-	int level = mConfig.textLevel();
-
-	if (level < 0 || level>3) {
-		level = 1;
-		qWarning() << "TextLevel has to be an Integer from 0-3: 0(block), 1(paragraph), 2(line), 3(word))";
-		qInfo() << "TextLevel set to 1.";
-	}
-
-	int b = 0;
-	int p = 0; 
-	int w = 0; 
-	int l = 0; 
-	int s = 0;
-	int n = 0;
-
-	// test recursion impl
-	//tesseract::PageIteratorLevel fil = static_cast<tesseract::PageIteratorLevel>(level);
-
-	processTextRegions(tesseract::RIL_BLOCK, static_cast<tesseract::PageIteratorLevel>(level), ri, xmlPage->rootRegion());
-
-	// not used atm -> tbd
-	////iterate through result data and write to xml
-	//if (ri != 0) {
-	//	while (!ri->Empty(tesseract::RIL_BLOCK)) {
-	//		if (PTIsTextType(ri->BlockType())) {				//processing only text blocks
-	//			//block level processing
-	//			if (ri->IsAtBeginningOf(tesseract::RIL_BLOCK)) {
-	//				if (level >= 0) {
-	//					QSharedPointer<rdf::TextRegion> block = createTextRegion(ri, tesseract::RIL_BLOCK, level);
-	//					bool finished_block = false;
-
-	//					//paragraph level processing
-	//					if (level > 0) {
-	//						while (!finished_block) {
-	//							if (ri->IsAtBeginningOf(tesseract::RIL_PARA)) {
-	//								QSharedPointer<rdf::TextRegion> para = createTextRegion(ri, tesseract::RIL_PARA, level);
-	//								bool finished_para = false;
-	//								
-	//								//line level processing
-	//								if (level == 2) {
-	//									while (!finished_para) {
-	//										if (ri->IsAtBeginningOf(tesseract::RIL_TEXTLINE)) {
-	//											QSharedPointer<rdf::TextLine> line = createTextLine(ri, level);
-	//											para->addChild(line);
-	//										}
-	//										if (ri->IsAtFinalElement(tesseract::RIL_PARA, tesseract::RIL_TEXTLINE)) {
-	//											finished_para = true;
-	//											break;
-	//										}
-	//										l++;
-	//										ri->Next(tesseract::RIL_TEXTLINE);
-	//									}
-	//								}
-
-	//								//word level processing
-	//								if (level == 3) {
-	//									while (!finished_para) {
-	//										if (ri->IsAtBeginningOf(tesseract::RIL_WORD)) {
-	//											QSharedPointer<rdf::TextRegion> word = createTextRegion(ri, tesseract::RIL_WORD, level);
-	//											para->addChild(word);
-	//										}
-	//										if (ri->IsAtFinalElement(tesseract::RIL_PARA, tesseract::RIL_WORD)) {
-	//											finished_para = true;
-	//											break;
-	//										}
-	//										w++;
-	//										ri->Next(tesseract::RIL_WORD);
-	//									}
-	//								}
-
-	//								//add text region to xml
-	//								block->addChild(para);
-	//								//xmlPage->rootRegion()->addChild(para);
-
-	//								p++;
-	//								if (ri->IsAtFinalElement(tesseract::RIL_BLOCK, tesseract::RIL_PARA)) {
-	//									finished_block = true;
-	//									break;
-	//								}
-
-	//								ri->Next(tesseract::RIL_PARA);
-	//							}
-	//						}
-	//					}
-	//				
-	//					//add block region to xml
-	//					xmlPage->rootRegion()->addChild(block);
-
-	//					// move to next block
-	//					ri->Next(tesseract::RIL_BLOCK);
-	//					b++;
-	//				}
-	//			}
-	//		}
-	//		else {
-	//			// non-text block processing
-	//			ri->Next(tesseract::RIL_BLOCK); // note: RIL_SYMBOL skips non-text 
-	//			n++;
-	//			//qDebug() << "non-text block found";
-	//		}
-	//	}
-	//}
-
-	//text region ~= text block set -> text block -> text line set -> text line (elements)
-	//qDebug() << "#blocks: " << b << " #para: " << p << " #lines: " << l << " #words: " << w << " #symbols: " << s << " #non-text: " << n;
-	return;
-}
-
-void TesseractOCR::processTextRegions(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const {
-
-	if (!ri->Empty(cil)){
+	if (!ri->Empty(cil)) {
 		if (PTIsTextType(ri->BlockType())) {
 			if (cil <= fil) {
 
 				QSharedPointer<rdf::Region> child;
 
-				if (ri->IsAtBeginningOf(cil)) {	
+				if (ri->IsAtBeginningOf(cil)) {
 
 					if (cil == tesseract::RIL_TEXTLINE) {
 						child = createTextLine(ri, fil);
@@ -378,18 +256,18 @@ void TesseractOCR::processTextRegions(const tesseract::PageIteratorLevel cil, co
 					}
 
 					//process text regions of the current child
-					processTextRegions(static_cast<tesseract::PageIteratorLevel>(cil + 1), fil, ri, child);
+					convertRegion(static_cast<tesseract::PageIteratorLevel>(cil + 1), fil, ri, child);
 					parent->addChild(child);
 				}
 
-				if (cil != tesseract::RIL_BLOCK ){
+				if (cil != tesseract::RIL_BLOCK) {
 					if (ri->IsAtFinalElement(static_cast<tesseract::PageIteratorLevel>(cil - 1), cil)) {
 						return;
 					}
 				}
 
 				if (ri->Next(cil)) {
-					processTextRegions(cil, fil, ri, parent);
+					convertRegion(cil, fil, ri, parent);
 				}
 			}
 			else {
@@ -400,14 +278,14 @@ void TesseractOCR::processTextRegions(const tesseract::PageIteratorLevel cil, co
 		else {
 			//qDebug() << "Found a non text block!";
 			ri->Next(tesseract::RIL_BLOCK);
-			processTextRegions(cil, fil, ri, parent);
+			convertRegion(cil, fil, ri, parent);
 		}
 	}
 	//qDebug() << "Finished processing text regions!";
 	return;
 }
 
-QSharedPointer<rdf::TextRegion> TesseractOCR::createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel riLevel, const tesseract::PageIteratorLevel outputLevel) const {
+QSharedPointer<rdf::TextRegion> TesseractPlugin::createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel riLevel, const tesseract::PageIteratorLevel outputLevel) const {
 
 	// TODO find a more general way to create all kinds of text region in one function
 
@@ -432,7 +310,7 @@ QSharedPointer<rdf::TextRegion> TesseractOCR::createTextRegion(const tesseract::
 	return textRegion;
 }
 
-QSharedPointer<rdf::TextLine> TesseractOCR::createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel) const {
+QSharedPointer<rdf::TextLine> TesseractPlugin::createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel) const {
 
 	//create text region element
 	QSharedPointer<rdf::TextLine> textLine(new rdf::TextLine());
@@ -454,24 +332,32 @@ QSharedPointer<rdf::TextLine> TesseractOCR::createTextLine(const tesseract::Resu
 	return textLine;
 }
 
-QImage TesseractOCR::addTextToXML(QImage img, const QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const {
-	
+void TesseractPlugin::setUpOCR(const QImage img, tesseract::TessBaseAPI* tessAPI) const {
+
+	tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
+	tessAPI->SetVariable("save_best_choices", "T");
+	tessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
+}
+
+QImage TesseractPlugin::addTextToXML(QImage img, const QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const {
+
 	// TODO best value/method for padding of text boxes for OCR
 	// TODO remove merging of overlapping regions - assume input is polygonal region and process only the specified area (masking image if needed)
+	// TODO check if additional line breaks are caused by processing text
 
 	rdf::Timer dt;
 
 	// get text regions from existing xml (type_text_region + type_text_line)
 	QVector<QSharedPointer<rdf::Region>> tRegions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_region);
 	tRegions = tRegions + rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_line);
-	
+
 	//get boxes representing OCR regions
 	QVector<rdf::Rect> tBoxes = getOCRBoxes(img.size(), tRegions);
 
 	// TODO fix coloring of drawn items
-	
+
 	QPainter myPainter(&img);
-	
+
 	myPainter.setPen(QPen(QBrush(rdf::ColorManager::blue()), 3));
 	myPainter.setBrush(Qt::NoBrush);
 
@@ -488,7 +374,7 @@ QImage TesseractOCR::addTextToXML(QImage img, const QSharedPointer<rdf::PageElem
 
 	// compute OCR results and add them to the corresponding text regions
 	for (int i = 0; i < tBoxes.size(); ++i) {
-		
+
 		rdf::Rect b = tBoxes[i];
 
 		if (b.isNull()) {
@@ -498,7 +384,7 @@ QImage TesseractOCR::addTextToXML(QImage img, const QSharedPointer<rdf::PageElem
 		// set up and apply tesseract
 		tessAPI->SetRectangle((int)b.topLeft().x(), (int)b.topLeft().y(), (int)b.width(), (int)b.height());
 		tessAPI->Recognize(0);
-		
+
 		//ignore merging and processing of rects
 		char* boxText = tessAPI->GetUTF8Text();
 
@@ -535,7 +421,7 @@ QImage TesseractOCR::addTextToXML(QImage img, const QSharedPointer<rdf::PageElem
 }
 
 // get boxes representing text regions where OCR should be applied
-QVector<rdf::Rect> TesseractOCR::getOCRBoxes(const QSize imgSize, const QVector<QSharedPointer<rdf::Region>> tRegions) const {
+QVector<rdf::Rect> TesseractPlugin::getOCRBoxes(const QSize imgSize, const QVector<QSharedPointer<rdf::Region>> tRegions) const {
 
 	QVector<rdf::Rect> tBoxes = QVector<rdf::Rect>(tRegions.size());
 
@@ -565,7 +451,7 @@ QVector<rdf::Rect> TesseractOCR::getOCRBoxes(const QSize imgSize, const QVector<
 	return tBoxes;
 }
 
-rdf::Rect TesseractOCR::polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const {
+rdf::Rect TesseractPlugin::polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const {
 
 	rdf::Rect tmp = rdf::Rect::fromPoints(poly.toPoints());
 	tmp.expand(10); // expanding image improves OCR results - avoids errors if text is connected to the image border
@@ -574,7 +460,7 @@ rdf::Rect TesseractOCR::polygonToOCRBox(const QSize imgSize, const rdf::Polygon 
 	return tmp;
 }
 
-QVector<rdf::Rect> TesseractOCR::mergeOverlappingBoxes(QVector<rdf::Rect> boxes) const {
+QVector<rdf::Rect> TesseractPlugin::mergeOverlappingBoxes(QVector<rdf::Rect> boxes) const {
 
 	for (int i = 0; i < boxes.size(); ++i) {
 		for (int j = 0; j < boxes.size(); ++j) {
@@ -591,8 +477,8 @@ QVector<rdf::Rect> TesseractOCR::mergeOverlappingBoxes(QVector<rdf::Rect> boxes)
 	return boxes;
 }
 
-void TesseractOCR::processRectResults(const rdf::Rect box, const QVector<rdf::Rect> tBoxes,
-	tesseract::TessBaseAPI* tessAPI, QVector<QSharedPointer<rdf::Region>> tRegions) const{
+void TesseractPlugin::processRectResults(const rdf::Rect box, const QVector<rdf::Rect> tBoxes,
+	tesseract::TessBaseAPI* tessAPI, QVector<QSharedPointer<rdf::Region>> tRegions) const {
 
 	// TODO remove in next update
 
@@ -641,10 +527,10 @@ void TesseractOCR::processRectResults(const rdf::Rect box, const QVector<rdf::Re
 
 }
 
-void TesseractOCR::writeTextToRegions(const char* lineText, const rdf::Rect lineRect, 
+void TesseractPlugin::writeTextToRegions(const char* lineText, const rdf::Rect lineRect,
 	const QVector<rdf::Rect> tBoxes, QVector<QSharedPointer<rdf::Region>>& tRegions) const {
 	int rIdx = -1;
-	
+
 	for (int i = 0; i < tRegions.size(); ++i) {
 		if (tBoxes[i].contains(lineRect)) {
 			if (rIdx == -1) {
@@ -656,8 +542,8 @@ void TesseractOCR::writeTextToRegions(const char* lineText, const rdf::Rect line
 			}
 		}
 	}
-	
-	if(rIdx!=-1){
+
+	if (rIdx != -1) {
 		auto r = tRegions[rIdx];
 		if (r->type() == rdf::Region::type_text_region) {
 			auto rc = qSharedPointerCast<rdf::TextRegion>(r);
@@ -668,21 +554,82 @@ void TesseractOCR::writeTextToRegions(const char* lineText, const rdf::Rect line
 			auto rc = qSharedPointerCast<rdf::TextLine>(r);
 			rc->setText(rc->text() + QString::fromUtf8(lineText));
 			tRegions[rIdx] = rc;
-		}	
+		}
 	}
 	else {
 		qWarning() << "Could not find text region for OCR results";
 	}
 }
 
+// TesseractEngine functions--------------------------------------------------------------------------
+TesseractEngine::TesseractEngine() {
+	
+	mTessAPI = new tesseract::TessBaseAPI();
+}
+
+TesseractEngine::~TesseractEngine() {
+
+	mTessAPI->End();
+	qDebug() << "Tesseract plugin: destroying tesseract engine...";
+}
+
+tesseract::TessBaseAPI* TesseractEngine::tessAPI() {
+
+	return mTessAPI;
+
+}
+
+bool TesseractEngine::init(const QString tessdataDir) {
+
+	// TODO allow different languages
+	char * lang = "eng";
+	
+	if (mTessAPI->Init(tessdataDir.toStdString().c_str(), lang)==-1)
+	{
+		qWarning() << "Tesseract plugin: Could not initialize tesseract API!";
+		qWarning() << "Tesseract plugin: Set path to directory containing \"tessdata\" folder using config plugin!";
+		qWarning() << "Tesseract plugin: If tessdata folder is missing, create it and download eng.traineddata from github https:\\\\github.com\\tesseract-ocr\\tessdata";
+
+		return false;
+	}
+	else {
+		qInfo() << "Tesseract plugin: Initialized tesseract API.";
+		qInfo() << "Tesseract plugin: Using tesseract version: " << mTessAPI->Version();
+	}
+
+	return true;
+}
+
+void TesseractEngine::setImage(const QImage img) {	
+	mTessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
+}
+
+void TesseractEngine::setTessVariables(const tesseract::PageSegMode psm) {
+	
+	mTessAPI->SetPageSegMode(psm);
+	mTessAPI->SetVariable("save_best_choices", "T");
+}
+
+tesseract::ResultIterator* TesseractEngine::processPage(const QImage img) {
+
+	setImage(img);
+	setTessVariables(tesseract::PageSegMode::PSM_AUTO);
+
+	mTessAPI->Recognize(0);
+
+	tesseract::ResultIterator* ri = mTessAPI->GetIterator();
+
+	return ri;
+}
+
 
 // plugin functions----------------------------------------------------------------------------------
-void TesseractOCR::preLoadPlugin() const {
+void TesseractPlugin::preLoadPlugin() const {
 
 	//qDebug() << "[PRE LOADING] Batch Test";
 }
 
-void TesseractOCR::postLoadPlugin(const QVector<QSharedPointer<nmc::DkBatchInfo>>& batchInfo) const {
+void TesseractPlugin::postLoadPlugin(const QVector<QSharedPointer<nmc::DkBatchInfo>>& batchInfo) const {
 	int runIdx = mRunIDs.indexOf(batchInfo.first()->id());
 
 	for (auto bi : batchInfo) {
@@ -691,15 +638,15 @@ void TesseractOCR::postLoadPlugin(const QVector<QSharedPointer<nmc::DkBatchInfo>
 	}
 }
 
-QString TesseractOCR::name() const {
+QString TesseractPlugin::name() const {
 	return "Tesseract OCR";
 }
 
-QString TesseractOCR::settingsFilePath() const {
+QString TesseractPlugin::settingsFilePath() const {
 	return rdf::Config::instance().settingsFilePath();
 }
 
-void TesseractOCR::loadSettings(QSettings & settings) {
+void TesseractPlugin::loadSettings(QSettings & settings) {
 
 	// update settings
 	settings.beginGroup(name());
@@ -707,7 +654,7 @@ void TesseractOCR::loadSettings(QSettings & settings) {
 	settings.endGroup();
 }
 
-void TesseractOCR::saveSettings(QSettings & settings) const {
+void TesseractPlugin::saveSettings(QSettings & settings) const {
 
 	// save settings (this is needed for batch profiles)
 	settings.beginGroup(name());
@@ -716,48 +663,48 @@ void TesseractOCR::saveSettings(QSettings & settings) const {
 }
 
 // tesseract config---------------------------------------------------------------------------
-TesseractOCRConfig::TesseractOCRConfig() : ModuleConfig("TesseractPlugin") {
+TesseractPluginConfig::TesseractPluginConfig() : ModuleConfig("TesseractPlugin") {
 }
 
-void TesseractOCRConfig::load(const QSettings & settings) {
+void TesseractPluginConfig::load(const QSettings & settings) {
 
 	mTessdataDir = settings.value("TessdataDir", mTessdataDir).toString();
 	mTextLevel = settings.value("TextLevel", mTextLevel).toInt();
 	mDrawResults = settings.value("DrawResults", mDrawResults).toBool();
 }
 
-void TesseractOCRConfig::save(QSettings & settings) const {
+void TesseractPluginConfig::save(QSettings & settings) const {
 
 	settings.setValue("TessdataDir", mTessdataDir);
 	settings.setValue("TextLevel", mTextLevel);
 	settings.setValue("DrawResults", mDrawResults);
 }
 
-QString TesseractOCRConfig::TessdataDir() const {
+QString TesseractPluginConfig::TessdataDir() const {
 	return mTessdataDir;
 }
 
-void TesseractOCRConfig::setTessdataDir(const QString dir) {
-	mTessdataDir = dir;
-}
+//void TesseractPluginConfig::setTessdataDir(const QString dir) {
+//	mTessdataDir = dir;
+//}
 
-int TesseractOCRConfig::textLevel() const {
+int TesseractPluginConfig::textLevel() const {
 	return mTextLevel;
 }
 
-void TesseractOCRConfig::setTextLevel(int level) {
-	mTextLevel = level;
-}
+//void TesseractPluginConfig::setTextLevel(int level) {
+//	mTextLevel = level;
+//}
 
-bool TesseractOCRConfig::drawResults() const {
+bool TesseractPluginConfig::drawResults() const {
 	return mDrawResults;
 }
 
-void TesseractOCRConfig::setDrawResults(bool draw) {
-	mDrawResults = draw;
-}
+//void TesseractPluginConfig::setDrawResults(bool draw) {
+//	mDrawResults = draw;
+//}
 
-QString TesseractOCRConfig::toString() const {
+QString TesseractPluginConfig::toString() const {
 
 	QString msg = rdf::ModuleConfig::toString();
 	msg += "  TessdataDir: " + mTessdataDir;
