@@ -40,12 +40,9 @@ related links:
 
 // ReadFramework
 #include "PageParser.h"
-#include "Shapes.h"
 #include "Utils.h"
-
+#include "ElementsHelper.h"
 #include "Drawer.h"
-
-
 
 //tesseract
 #include <allheaders.h> // leptonica main header for image io
@@ -174,13 +171,11 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 		if (!initialized) {
 			return imgC;
 		}
-
-		// TODO remove after refactoring xml processing
-		tesseract::TessBaseAPI* tessAPI = tessEngine.tessAPI();
 		
 		if (!xml_found) {
 
 			qInfo() << "Tesseract plugin: OCR on current image";
+			rdf::Timer dt;
 
 			// compute tesseract OCR results
 			tesseract::ResultIterator* pageResults;
@@ -188,32 +183,31 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 
 			// convert results to PAGE xml regions
 			convertPageResults(pageResults, xmlPage);
+
+			qInfo() << "Tesseract plugin: OCR results computed in" << dt;
 		}
 		else {
 			
-			// TODO remove after refactoring xml processing
-			setUpOCR(img, tessAPI);
-
 			qInfo() << "Tesseract plugin: OCR on current image - using existing PAGE xml";
+			rdf::Timer dt;
 
-			// add OCR results to xml file
-			QImage result = addTextToXML(img, xmlPage, tessAPI);
+			// extract list of text regions that should be processed by tesseract
+			QVector<QSharedPointer<rdf::Region>> textRegions = extractTextRegions(xmlPage);
+			QImage result = tessEngine.processTextRegions(img, textRegions);
+			
+			qInfo() << "Tesseract plugin: OCR results computed in" << dt;
 
 			// drawing result boxes
 			if (mConfig.drawResults()) {
 
 				qDebug() << "Tesseract plugin: Drawing OCR boxes that have been recognized.";
 				imgC->setImage(result, "OCR boxes");
-
 			}
 		}
 		
 		// write xml output
 		QString saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
 		parser.write(saveXmlPath, xmlPage);
-
-		// close tesseract api
-		tessAPI->End();
 	}
 
 	// wrong runID? - do nothing
@@ -332,251 +326,48 @@ QSharedPointer<rdf::TextLine> TesseractPlugin::createTextLine(const tesseract::R
 	return textLine;
 }
 
-void TesseractPlugin::setUpOCR(const QImage img, tesseract::TessBaseAPI* tessAPI) const {
-
-	tessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
-	tessAPI->SetVariable("save_best_choices", "T");
-	tessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
-}
-
-QImage TesseractPlugin::addTextToXML(QImage img, const QSharedPointer<rdf::PageElement> xmlPage, tesseract::TessBaseAPI* tessAPI) const {
-
-	// TODO best value/method for padding of text boxes for OCR
-	// TODO remove merging of overlapping regions - assume input is polygonal region and process only the specified area (masking image if needed)
-	// TODO check if additional line breaks are caused by processing text
-
-	rdf::Timer dt;
+// extract text region containing no text results
+QVector<QSharedPointer<rdf::Region>> TesseractPlugin::extractTextRegions(const QSharedPointer<rdf::PageElement> xmlPage) const {
 
 	// get text regions from existing xml (type_text_region + type_text_line)
 	QVector<QSharedPointer<rdf::Region>> tRegions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_region);
 	tRegions = tRegions + rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_line);
+	
+	QVector<QSharedPointer<rdf::Region>> emptyTextRegions;
 
-	//get boxes representing OCR regions
-	QVector<rdf::Rect> tBoxes = getOCRBoxes(img.size(), tRegions);
-
-	// TODO fix coloring of drawn items
-
-	QPainter myPainter(&img);
-
-	myPainter.setPen(QPen(QBrush(rdf::ColorManager::blue()), 3));
-	myPainter.setBrush(Qt::NoBrush);
-
-	for (int i = 0; i < tBoxes.size(); i++) {
-		QRect tmpBox = tBoxes[i].toQRect();
-		myPainter.drawRect(tmpBox);
-	}
-
-	myPainter.end();
-
-	// merge overlapping regions - avoid misclassification and double recognition
-	//QVector<rdf::Rect> oBoxes = tBoxes;
-	//oBoxes = mergeOverlappingBoxes(oBoxes);
-
-	// compute OCR results and add them to the corresponding text regions
-	for (int i = 0; i < tBoxes.size(); ++i) {
-
-		rdf::Rect b = tBoxes[i];
-
-		if (b.isNull()) {
-			continue;
-		}
-
-		// set up and apply tesseract
-		tessAPI->SetRectangle((int)b.topLeft().x(), (int)b.topLeft().y(), (int)b.width(), (int)b.height());
-		tessAPI->Recognize(0);
-
-		//ignore merging and processing of rects
-		char* boxText = tessAPI->GetUTF8Text();
-
-		auto r = tRegions[i];
-		if (r->type() == rdf::Region::type_text_region) {
-			auto rc = qSharedPointerCast<rdf::TextRegion>(r);
-			rc->setText(QString::fromUtf8(boxText));
-			tRegions[i] = rc;
-		}
-		else if (r->type() == rdf::Region::type_text_line) {
-			auto rc = qSharedPointerCast<rdf::TextLine>(r);
-			rc->setText(QString::fromUtf8(boxText));
-			tRegions[i] = rc;
-		}
-
-		delete[] boxText;
-
-		//iterate through result data and save to text regions
-		//processRectResults(b, tBoxes, tessAPI, tRegions);
-
-		//debug ocr images
-		//cv::Mat src = nmc::DkImage::qImage2Mat(img);
-		//cv::Mat trImg = cv::Mat(src, b.toCvRect());
-		//cv::String winName = "image of text region ";
-		//winName = winName + std::to_string(tBoxes.indexOf(b));
-		//cv::namedWindow(winName, cv::WINDOW_AUTOSIZE);// Create a window for display.
-		//cv::imshow(winName, trImg);
-	}
-
-	//qInfo() << "There are " << tBoxes.size() << " text regions in the XML";
-	qInfo() << "ocr results computed in" << dt;
-
-	return img;
-}
-
-// get boxes representing text regions where OCR should be applied
-QVector<rdf::Rect> TesseractPlugin::getOCRBoxes(const QSize imgSize, const QVector<QSharedPointer<rdf::Region>> tRegions) const {
-
-	QVector<rdf::Rect> tBoxes = QVector<rdf::Rect>(tRegions.size());
-
-	for (int i = 0; i < tRegions.size(); ++i) {
-
-		auto r = tRegions[i];
+	for (auto r : tRegions) {
 
 		if (!r->isEmpty() && !r->polygon().isEmpty()) {
 
 			if (r->type() == rdf::Region::type_text_region) {
 				auto trc = qSharedPointerCast<rdf::TextRegion>(r);
 				if (trc->text().isEmpty()) {
-					rdf::Rect tmp = polygonToOCRBox(imgSize, trc->polygon());
-					tBoxes[i] = tmp;
+					emptyTextRegions.append(r);
 				}
 			}
 			else if (r->type() == rdf::Region::type_text_line) {
 				auto trc = qSharedPointerCast<rdf::TextLine>(r);
 				if (trc->text().isEmpty()) {
-					rdf::Rect tmp = polygonToOCRBox(imgSize, trc->polygon());
-					tBoxes[i] = tmp;
+					emptyTextRegions.append(r);
 				}
 			}
 		}
 	}
 
-	return tBoxes;
-}
+	qWarning() << "Tesseract plugin: Found" << emptyTextRegions.size() << "empty text regions where text recognition results will be added.";
 
-rdf::Rect TesseractPlugin::polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const {
-
-	rdf::Rect tmp = rdf::Rect::fromPoints(poly.toPoints());
-	tmp.expand(10); // expanding image improves OCR results - avoids errors if text is connected to the image border
-	tmp = tmp.clipped(rdf::Vector2D(imgSize));
-
-	return tmp;
-}
-
-QVector<rdf::Rect> TesseractPlugin::mergeOverlappingBoxes(QVector<rdf::Rect> boxes) const {
-
-	for (int i = 0; i < boxes.size(); ++i) {
-		for (int j = 0; j < boxes.size(); ++j) {
-			if (i == j) { continue; }
-			if (boxes[i].intersects(boxes[j])) {
-				//qInfo() << "joining : " << boxes[i].toString() << "and" << boxes[j].toString();
-				boxes[i] = boxes[i].joined(boxes[j]);
-				boxes.remove(j);
-
-				return mergeOverlappingBoxes(boxes);
-			}
-		}
-	}
-	return boxes;
-}
-
-void TesseractPlugin::processRectResults(const rdf::Rect box, const QVector<rdf::Rect> tBoxes,
-	tesseract::TessBaseAPI* tessAPI, QVector<QSharedPointer<rdf::Region>> tRegions) const {
-
-	// TODO remove in next update
-
-	tesseract::ResultIterator* ri = tessAPI->GetIterator();
-
-	if (ri != 0) {
-		while (!ri->Empty(tesseract::RIL_BLOCK)) {
-
-			//processing only text blocks
-			if (PTIsTextType(ri->BlockType())) {
-
-				//line level processing
-				if (ri->IsAtBeginningOf(tesseract::RIL_TEXTLINE)) {
-
-					// get line text
-					char* lineText = ri->GetUTF8Text(tesseract::RIL_TEXTLINE);
-
-					// get bb of current text line
-					int x1, y1, x2, y2;
-					ri->BoundingBox(tesseract::RIL_TEXTLINE, &x1, &y1, &x2, &y2);
-					rdf::Rect lr(QRect(QPoint(x1, y1), QPoint(x2, y2)));
-
-					// make sure that the result rect created is smaller than the actual ROI
-					if (!box.contains(lr)) {
-						lr = lr.intersected(box);
-					}
-
-					//save OCR results to text region
-					writeTextToRegions(lineText, lr, tBoxes, tRegions);
-
-					delete[] lineText;
-
-					ri->Next(tesseract::RIL_TEXTLINE);
-				}
-				else {
-					ri->Next(tesseract::RIL_TEXTLINE);
-					continue;
-				}
-			}
-			else {
-				// non-text block processing
-				ri->Next(tesseract::RIL_TEXTLINE); //move on to next non-text region, RIL_SYMBOL skips non-text 
-			}
-		}
-	}
-
-}
-
-void TesseractPlugin::writeTextToRegions(const char* lineText, const rdf::Rect lineRect,
-	const QVector<rdf::Rect> tBoxes, QVector<QSharedPointer<rdf::Region>>& tRegions) const {
-	int rIdx = -1;
-
-	for (int i = 0; i < tRegions.size(); ++i) {
-		if (tBoxes[i].contains(lineRect)) {
-			if (rIdx == -1) {
-				rIdx = i;
-			}
-			else {
-				if (tBoxes[rIdx].area() > tBoxes[i].area())
-					rIdx = i;
-			}
-		}
-	}
-
-	if (rIdx != -1) {
-		auto r = tRegions[rIdx];
-		if (r->type() == rdf::Region::type_text_region) {
-			auto rc = qSharedPointerCast<rdf::TextRegion>(r);
-			rc->setText(rc->text() + QString::fromUtf8(lineText));
-			tRegions[rIdx] = rc;
-		}
-		else {
-			auto rc = qSharedPointerCast<rdf::TextLine>(r);
-			rc->setText(rc->text() + QString::fromUtf8(lineText));
-			tRegions[rIdx] = rc;
-		}
-	}
-	else {
-		qWarning() << "Could not find text region for OCR results";
-	}
+	return emptyTextRegions;
 }
 
 // TesseractEngine functions--------------------------------------------------------------------------
-TesseractEngine::TesseractEngine() {
-	
+
+TesseractEngine::TesseractEngine() {	
 	mTessAPI = new tesseract::TessBaseAPI();
 }
 
 TesseractEngine::~TesseractEngine() {
-
 	mTessAPI->End();
 	qDebug() << "Tesseract plugin: destroying tesseract engine...";
-}
-
-tesseract::TessBaseAPI* TesseractEngine::tessAPI() {
-
-	return mTessAPI;
-
 }
 
 bool TesseractEngine::init(const QString tessdataDir) {
@@ -604,16 +395,18 @@ void TesseractEngine::setImage(const QImage img) {
 	mTessAPI->SetImage(img.bits(), img.width(), img.height(), img.bytesPerLine() / img.width(), img.bytesPerLine());
 }
 
-void TesseractEngine::setTessVariables(const tesseract::PageSegMode psm) {
-	
-	mTessAPI->SetPageSegMode(psm);
-	mTessAPI->SetVariable("save_best_choices", "T");
+void TesseractEngine::setRectangle(const rdf::Rect rect) {
+
+	mTessAPI->SetRectangle((int)rect.topLeft().x(), (int)rect.topLeft().y(), (int)rect.width(), (int)rect.height());
 }
 
 tesseract::ResultIterator* TesseractEngine::processPage(const QImage img) {
 
 	setImage(img);
-	setTessVariables(tesseract::PageSegMode::PSM_AUTO);
+	
+	//set tess parameters
+	mTessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
+	mTessAPI->SetVariable("save_best_choices", "T");
 
 	mTessAPI->Recognize(0);
 
@@ -622,6 +415,257 @@ tesseract::ResultIterator* TesseractEngine::processPage(const QImage img) {
 	return ri;
 }
 
+QImage TesseractEngine::processTextRegions(QImage img, QVector<QSharedPointer<rdf::Region>> textRegions){
+
+	// TODO fix coloring of drawn items
+	
+	// drawing for debug reasons
+	QImage result = img.copy();
+	QPainter myPainter(&result);
+	myPainter.setPen(QPen(QBrush(rdf::ColorManager::blue()), 3));
+	myPainter.setBrush(Qt::NoBrush);
+
+	//for (int i = 0; i < tBoxes.size(); ++i) {
+	for (auto r : textRegions) {
+		
+		if (r.isNull()) {
+			continue;
+		}
+
+		// removes isNull() points from polygon - rdf::Rect::fromPoints() method also ignores them
+		// TODO - check for bug when creating polygons with (0,0) points
+		//QPolygon poly = r->polygon().polygon().toPolygon();
+		//for (QPoint p : poly) {
+		//	if (p.isNull())
+		//		poly.removeOne(p);
+		//}
+		//r->polygon().setPolygon(QPolygonF(poly));
+		//r->setPolygon(rdf::Polygon(QPolygonF(poly)));
+
+		if (isAARect(r->polygon())) {
+			rdf::Rect rRect = polygonToOCRBox(img.size(), r->polygon());
+			addTextToRegion(img, r, rRect);
+		}
+		else {
+			QImage rImg = getRegionImage(img, r);
+			addTextToRegion(rImg, r);
+		}
+		
+
+		rdf::Rect rR = polygonToOCRBox(img.size(), r->polygon());
+		myPainter.drawPolyline(r->polygon().closedPolygon().begin(), r->polygon().closedPolygon().size());
+		//myPainter.drawRect(rR.toQRect());
+	}
+
+	myPainter.end();
+
+	return result;
+}
+
+void TesseractEngine::addTextToRegion(const QImage img, QSharedPointer<rdf::Region> region, const rdf::Rect regionRect, const tesseract::PageSegMode psm) {
+
+	// set rect region and do OCR
+	setImage(img);
+
+	if (!regionRect.isNull()) {
+		setRectangle(regionRect);
+	}
+
+	mTessAPI->SetPageSegMode(psm);
+	mTessAPI->SetVariable("save_best_choices", "T");
+
+	mTessAPI->Recognize(0);
+	char* boxText = mTessAPI->GetUTF8Text();
+
+	//write text to regions
+	auto r = region;
+	if (r->type() == rdf::Region::type_text_region) {
+		auto rc = qSharedPointerCast<rdf::TextRegion>(r);
+		rc->setText(QString::fromUtf8(boxText));
+	}
+	else if (r->type() == rdf::Region::type_text_line) {
+		auto rc = qSharedPointerCast<rdf::TextLine>(r);
+		rc->setText(QString::fromUtf8(boxText));
+	}
+
+	delete[] boxText;
+
+}
+
+// get a cropped and masked image of the text region
+QImage TesseractEngine::getRegionImage(const QImage img, const QSharedPointer<rdf::Region> region, const QColor fillColor) const {
+
+	// check for axis aligned rect
+	
+	// TODO test results and find out if there is a better method for masking a polygonal area
+	
+	// TODO check why img.format() results in black background sometimes
+	//QImage regionImg = QImage(img.size(), img.format());
+	QImage regionImg = QImage(img.size(), QImage::Format_RGB32);
+	regionImg.fill(fillColor);
+
+	QPainter myPainter(&regionImg);
+
+	myPainter.setClipRegion(QRegion(region->polygon().polygon().toPolygon()));
+	myPainter.drawImage(0, 0, img);
+
+	rdf::Rect regionRect = polygonToOCRBox(img.size(), region->polygon());	//this will add some additional padding
+	QImage croppedRI = regionImg.copy(regionRect.toQRect());
+
+	// debug ocr images
+	//cv::Mat cri = nmc::DkImage::qImage2Mat(croppedRI);
+	//cv::Mat ri = nmc::DkImage::qImage2Mat(regionImg);
+	//cv::String winName1 = "image of the cropped text region ";
+	//cv::String winName2 = "image of masked text region";
+	//winName1 = winName1 + region->id().toStdString();
+	//winName2 = winName2 + region->id().toStdString();
+	//
+	//cv::namedWindow(winName1, cv::WINDOW_AUTOSIZE);// Create a window for display.
+	//cv::imshow(winName1, cri);
+
+	//cv::namedWindow(winName2, cv::WINDOW_AUTOSIZE);// Create a window for display.
+	//cv::imshow(winName2, ri);
+	
+	return croppedRI;
+
+}
+
+rdf::Rect TesseractEngine::polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const {
+
+	rdf::Rect ocrBox = rdf::Rect::fromPoints(poly.toPoints());		// warning: fromPoints ignores point (0,0)
+	ocrBox.expand(10); // expanding image improves OCR results - avoids errors if text is connected to the image border
+	ocrBox = ocrBox.clipped(rdf::Vector2D(imgSize));
+
+	return ocrBox;
+}
+
+// returns true if polygon is an axis aligned rectangle
+bool TesseractEngine::isAARect(rdf::Polygon poly) {
+
+	// TODO test/debug function
+	
+	if (poly.size() == 4) {
+
+		QVector<rdf::Vector2D> pts;
+
+		for (const QPointF& p : poly.polygon()) {
+			pts << rdf::Vector2D(p);
+		}
+
+		rdf::Vector2D l1 = pts[0] - pts[1];
+		rdf::Vector2D l2 = pts[2] - pts[3];
+		
+		if (l1.length() == l2.length())
+			return true;
+		else
+			return false;
+	}
+	else {
+		return false;
+	}
+}
+
+// TessWord class functions --------------------------------------------------------------------------
+
+/// <summary>
+/// Initializes a new instance of the <see cref="TextLine"/> class.
+/// This class represents Text lines (Region::type_text_line).
+/// </summary>
+TessWord::TessWord(const Type& type) : Region(type) {
+
+	// default to text line
+	if (mType == type_unknown)
+		mType = Region::type_word;
+}
+
+/// <summary>
+/// Set the recognised text of the TessWord.
+/// </summary>
+/// <param name="text">The text corresponding to the textline.</param>
+void TessWord::setText(const QString & text) {
+	mTextEquiv = rdf::TextEquiv(text);
+}
+
+/// <summary>
+/// Text of the TessWord.
+/// </summary>
+/// <returns></returns>
+QString TessWord::text() const {
+	return mTextEquiv.text();
+}
+
+/// <summary>
+/// Reads a Textline from the XML stream.
+/// The stream must be at the position of the 
+/// TessWord's tag and is forwarded until its end
+/// </summary>
+/// <param name="reader">The XML stream.</param>
+/// <returns>true on success</returns>
+bool TessWord::read(QXmlStreamReader & reader) {
+
+	//rdf::RegionXmlHelper& rm = rdf::RegionXmlHelper::instance();
+
+	// read <TextEquiv>
+	//if (reader.tokenType() == QXmlStreamReader::StartElement && reader.qualifiedName() == rm.tag(rdf::RegionXmlHelper::tag_text_equiv)) {
+
+	//	mTextEquiv = rdf::TextEquiv::read(reader);
+	//}
+	//else
+	//	return Region::read(reader);
+
+	return false;
+}
+
+/// <summary>
+/// Writes the TessWord instance to the XML stream.
+/// </summary>
+/// <param name="writer">The XML stream.</param>
+void TessWord::write(QXmlStreamWriter & writer) const {
+
+	//rdf::RegionXmlHelper& rm = rdf::RegionXmlHelper::instance();
+
+	Region::createElement(writer);
+	Region::writePolygon(writer);
+
+	if (!text().isEmpty()) {
+		mTextEquiv.write(writer);
+	}
+
+	writeChildren(writer);
+	writer.writeEndElement(); // </Region>
+}
+
+/// <summary>
+/// Returns a string with all important properties of the TessWord.
+/// </summary>
+/// <param name="withChildren">if set to <c>true</c> children properties are written too.</param>
+/// <returns></returns>
+QString TessWord::toString(bool withChildren) const {
+
+	QString msg = Region::toString(false);
+
+	if (!text().isEmpty()) {
+		msg += " | text: ";
+		msg += text();
+	}
+
+	if (withChildren)
+		msg += Region::childrenToString();
+
+	return msg;
+}
+
+/// <summary>
+/// Draws the TextLine to the Painter.
+/// </summary>
+/// <param name="p">The painter.</param>
+/// <param name="config">The configuration (e.g. color of the Region).</param>
+void TessWord::draw(QPainter & p, const rdf::RegionTypeConfig & config) const {
+
+	Region::draw(p, config);
+	config.drawText();
+
+}
 
 // plugin functions----------------------------------------------------------------------------------
 void TesseractPlugin::preLoadPlugin() const {
@@ -684,25 +728,13 @@ QString TesseractPluginConfig::TessdataDir() const {
 	return mTessdataDir;
 }
 
-//void TesseractPluginConfig::setTessdataDir(const QString dir) {
-//	mTessdataDir = dir;
-//}
-
 int TesseractPluginConfig::textLevel() const {
 	return mTextLevel;
 }
 
-//void TesseractPluginConfig::setTextLevel(int level) {
-//	mTextLevel = level;
-//}
-
 bool TesseractPluginConfig::drawResults() const {
 	return mDrawResults;
 }
-
-//void TesseractPluginConfig::setDrawResults(bool draw) {
-//	mDrawResults = draw;
-//}
 
 QString TesseractPluginConfig::toString() const {
 
