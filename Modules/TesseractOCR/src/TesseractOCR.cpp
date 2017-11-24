@@ -41,7 +41,6 @@ related links:
 // ReadFramework
 #include "PageParser.h"
 #include "Utils.h"
-#include "ElementsHelper.h"
 #include "Drawer.h"
 
 //tesseract
@@ -279,7 +278,8 @@ void TesseractPlugin::convertRegion(const tesseract::PageIteratorLevel cil, cons
 	return;
 }
 
-QSharedPointer<rdf::TextRegion> TesseractPlugin::createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel riLevel, const tesseract::PageIteratorLevel outputLevel) const {
+QSharedPointer<rdf::TextRegion> TesseractPlugin::createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel riLevel, 
+	const tesseract::PageIteratorLevel outputLevel, bool textAtAllLevels) const {
 
 	// TODO find a more general way to create all kinds of text region in one function
 
@@ -290,21 +290,42 @@ QSharedPointer<rdf::TextRegion> TesseractPlugin::createTextRegion(const tesserac
 	ri->BoundingBox(riLevel, &x1, &y1, &x2, &y2);
 	rdf::Rect r(QRect(QPoint(x1, y1), QPoint(x2, y2)));
 	textRegion->setPolygon(rdf::Polygon::fromRect(r));
-
-	if (riLevel == outputLevel) {
+	
+	if (riLevel == outputLevel || textAtAllLevels) {
 		char* text = ri->GetUTF8Text(riLevel);
 		//qDebug("new block found: %s", text);
 		textRegion->setText(QString::fromUtf8(text));
 		delete[] text;
 	}
 
-	//textRegion->setId(textRegion->id().remove(QRegExp("{}")));
 	textRegion->setId(textRegion->id().remove("{").remove("}"));	// remove parentheses to please Aletheia and avoid errors
+
+	//if (riLevel == tesseract::RIL_WORD) {
+		// NOTE word font attributes currently not available for tess 4.0 LSTM mode
+
+		// TODO test if legacy engine provides font attributes while maintaining recognition performance of lstm
+		//float wConfidence = ri->Confidence(riLevel);
+		//qDebug() << "Word recognition confidence = " << wConfidence;
+
+		//bool* is_bold = false;
+		//bool* is_italic = false;
+		//bool* is_underlined = false;
+		//bool* is_monospace = false;
+		//bool* is_serif = false;
+		//bool* is_smallcaps = false;
+		//int* pointsize = 0;
+		//int* font_id = 0;
+
+		//ri->WordFontAttributes(is_bold, is_italic, is_underlined, is_monospace, is_serif, is_smallcaps, pointsize, font_id);
+		//
+		//qDebug() << "Word Font Attributes: " << is_bold << ", " << is_italic  << ", " << is_underlined << ", " << is_monospace << ", " << is_serif << ", " << is_smallcaps << ", " << pointsize << ", " << font_id << ", " << wConfidence;
+		
+	//}
 
 	return textRegion;
 }
 
-QSharedPointer<rdf::TextLine> TesseractPlugin::createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel) const {
+QSharedPointer<rdf::TextLine> TesseractPlugin::createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel, bool textAtAllLevels) const {
 
 	//create text region element
 	QSharedPointer<rdf::TextLine> textLine(new rdf::TextLine());
@@ -314,7 +335,7 @@ QSharedPointer<rdf::TextLine> TesseractPlugin::createTextLine(const tesseract::R
 	rdf::Rect r(QRect(QPoint(x1, y1), QPoint(x2, y2)));
 	textLine->setPolygon(rdf::Polygon::fromRect(r));
 
-	if (outputLevel == tesseract::RIL_TEXTLINE) {
+	if (outputLevel == tesseract::RIL_TEXTLINE || textAtAllLevels) {
 		char* text = ri->GetUTF8Text(tesseract::RIL_TEXTLINE);
 		//qDebug("new block found: %s", text);
 		textLine->setText(QString::fromUtf8(text));
@@ -374,7 +395,7 @@ bool TesseractEngine::init(const QString tessdataDir) {
 
 	// TODO allow different languages
 	char * lang = "eng";
-	
+
 	if (mTessAPI->Init(tessdataDir.toStdString().c_str(), lang)==-1)
 	{
 		qWarning() << "Tesseract plugin: Could not initialize tesseract API!";
@@ -386,6 +407,9 @@ bool TesseractEngine::init(const QString tessdataDir) {
 	else {
 		qInfo() << "Tesseract plugin: Initialized tesseract API.";
 		qInfo() << "Tesseract plugin: Using tesseract version: " << mTessAPI->Version();
+		
+		tesseract::OcrEngineMode cOEM =  mTessAPI->oem();
+		qInfo() << "Tesseract plugin: Using OCR engine mode: " << cOEM;
 	}
 
 	return true;
@@ -454,7 +478,6 @@ QImage TesseractEngine::processTextRegions(QImage img, QVector<QSharedPointer<rd
 
 		rdf::Rect rR = polygonToOCRBox(img.size(), r->polygon());
 		myPainter.drawPolyline(r->polygon().closedPolygon().begin(), r->polygon().closedPolygon().size());
-		//myPainter.drawRect(rR.toQRect());
 	}
 
 	myPainter.end();
@@ -563,108 +586,6 @@ bool TesseractEngine::isAARect(rdf::Polygon poly) {
 	else {
 		return false;
 	}
-}
-
-// TessWord class functions --------------------------------------------------------------------------
-
-/// <summary>
-/// Initializes a new instance of the <see cref="TextLine"/> class.
-/// This class represents Text lines (Region::type_text_line).
-/// </summary>
-TessWord::TessWord(const Type& type) : Region(type) {
-
-	// default to text line
-	if (mType == type_unknown)
-		mType = Region::type_word;
-}
-
-/// <summary>
-/// Set the recognised text of the TessWord.
-/// </summary>
-/// <param name="text">The text corresponding to the textline.</param>
-void TessWord::setText(const QString & text) {
-	mTextEquiv = rdf::TextEquiv(text);
-}
-
-/// <summary>
-/// Text of the TessWord.
-/// </summary>
-/// <returns></returns>
-QString TessWord::text() const {
-	return mTextEquiv.text();
-}
-
-/// <summary>
-/// Reads a Textline from the XML stream.
-/// The stream must be at the position of the 
-/// TessWord's tag and is forwarded until its end
-/// </summary>
-/// <param name="reader">The XML stream.</param>
-/// <returns>true on success</returns>
-bool TessWord::read(QXmlStreamReader & reader) {
-
-	//rdf::RegionXmlHelper& rm = rdf::RegionXmlHelper::instance();
-
-	// read <TextEquiv>
-	//if (reader.tokenType() == QXmlStreamReader::StartElement && reader.qualifiedName() == rm.tag(rdf::RegionXmlHelper::tag_text_equiv)) {
-
-	//	mTextEquiv = rdf::TextEquiv::read(reader);
-	//}
-	//else
-	//	return Region::read(reader);
-
-	return false;
-}
-
-/// <summary>
-/// Writes the TessWord instance to the XML stream.
-/// </summary>
-/// <param name="writer">The XML stream.</param>
-void TessWord::write(QXmlStreamWriter & writer) const {
-
-	//rdf::RegionXmlHelper& rm = rdf::RegionXmlHelper::instance();
-
-	Region::createElement(writer);
-	Region::writePolygon(writer);
-
-	if (!text().isEmpty()) {
-		mTextEquiv.write(writer);
-	}
-
-	writeChildren(writer);
-	writer.writeEndElement(); // </Region>
-}
-
-/// <summary>
-/// Returns a string with all important properties of the TessWord.
-/// </summary>
-/// <param name="withChildren">if set to <c>true</c> children properties are written too.</param>
-/// <returns></returns>
-QString TessWord::toString(bool withChildren) const {
-
-	QString msg = Region::toString(false);
-
-	if (!text().isEmpty()) {
-		msg += " | text: ";
-		msg += text();
-	}
-
-	if (withChildren)
-		msg += Region::childrenToString();
-
-	return msg;
-}
-
-/// <summary>
-/// Draws the TextLine to the Painter.
-/// </summary>
-/// <param name="p">The painter.</param>
-/// <param name="config">The configuration (e.g. color of the Region).</param>
-void TessWord::draw(QPainter & p, const rdf::RegionTypeConfig & config) const {
-
-	Region::draw(p, config);
-	config.drawText();
-
 }
 
 // plugin functions----------------------------------------------------------------------------------

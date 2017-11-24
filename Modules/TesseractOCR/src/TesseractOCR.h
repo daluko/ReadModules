@@ -35,11 +35,12 @@ related links:
 #include "DkPluginInterface.h"
 #include "DkBatchInfo.h"
 
-// read includes
+// rdf includes
 #include "BaseModule.h"
 #include "Elements.h"
 #include "Shapes.h"
 #include <QXmlStreamReader>
+#include "ElementsHelper.h"
 
 //tesseract includes
 #include <baseapi.h> // tesseract main header
@@ -79,25 +80,6 @@ namespace rdm {
 
 			void load(const QSettings& settings) override;
 			void save(QSettings& settings) const override;
-	};
-
-	class TessWord : public rdf::Region {
-
-	public:
-		TessWord(const Type& type = Type::type_unknown);
-
-		void setText(const QString& text);
-		QString text() const;
-
-		virtual bool read(QXmlStreamReader& reader) override;
-		virtual void write(QXmlStreamWriter& writer) const override;
-
-		virtual QString toString(bool withChildren = false) const override;
-
-		virtual void draw(QPainter& p, const rdf::RegionTypeConfig& config) const override;
-
-	protected:
-		rdf::TextEquiv mTextEquiv;
 	};
 
 	class TesseractEngine {
@@ -167,8 +149,10 @@ namespace rdm {
 		QVector<QSharedPointer<rdf::Region>> extractTextRegions(const QSharedPointer<rdf::PageElement> xmlPage) const;
 
 		void convertRegion(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const;
-		QSharedPointer<rdf::TextRegion> createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel level, const tesseract::PageIteratorLevel outputLevel) const;
-		QSharedPointer<rdf::TextLine> createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel) const;
+		QSharedPointer<rdf::TextRegion> createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel level, 
+			const tesseract::PageIteratorLevel outputLevel, bool textAtAllLevels = false) const;
+		QSharedPointer<rdf::TextLine> createTextLine(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel outputLevel, 
+			bool textAtAllLevels = false) const;
 	};
 
 };
