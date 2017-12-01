@@ -70,6 +70,8 @@ namespace rdm {
 			//void setTextLevel(int level);
 
 			bool drawResults() const;
+
+			bool singleLevelOutput() const;
 			//void setDrawResults(bool draw);
 
 		private:
@@ -77,6 +79,7 @@ namespace rdm {
 			QString mTessdataDir = QString("E:\\dev\\CVL\\ReadModules\\ReadModules\\Modules\\TesseractOCR");
 			int mTextLevel = 2;
 			bool mDrawResults = false;
+			bool mSingleLevelOutput = false;
 
 			void load(const QSettings& settings) override;
 			void save(QSettings& settings) const override;

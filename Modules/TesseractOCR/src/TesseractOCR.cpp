@@ -229,6 +229,29 @@ void TesseractPlugin::convertPageResults(tesseract::ResultIterator* pageResults,
 	tesseract::PageIteratorLevel currentLevel = tesseract::RIL_BLOCK;
 
 	convertRegion(currentLevel, outputLevel, pageResults, xmlPage->rootRegion());
+
+	if (mConfig.singleLevelOutput()) {
+		QVector<QSharedPointer<rdf::Region>> regions;
+
+		if (ol == 2) {
+			regions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_line);
+		}
+		else if (ol == 3) {
+			regions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_word);
+		}
+		else {
+			regions = rdf::Region::filter(xmlPage->rootRegion().data(), rdf::Region::type_text_region);
+		}
+
+		if (!regions.isEmpty()){
+			xmlPage->rootRegion()->removeAllChildren();
+			for (QSharedPointer<rdf::Region> c : regions) {
+				if (c->children().isEmpty()) {	// do not add RIL_BLOCK elements
+					xmlPage->rootRegion()->addChild(c);
+				}
+			}
+		}
+	}
 }
 
 void TesseractPlugin::convertRegion(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const {
@@ -299,6 +322,10 @@ QSharedPointer<rdf::TextRegion> TesseractPlugin::createTextRegion(const tesserac
 	}
 
 	textRegion->setId(textRegion->id().remove("{").remove("}"));	// remove parentheses to please Aletheia and avoid errors
+
+	if (riLevel == tesseract::PageIteratorLevel::RIL_WORD) {
+		textRegion->setType(rdf::Region::type_word);
+	}
 
 	//if (riLevel == tesseract::RIL_WORD) {
 		// NOTE word font attributes currently not available for tess 4.0 LSTM mode
@@ -442,8 +469,6 @@ tesseract::ResultIterator* TesseractEngine::processPage(const QImage img) {
 QImage TesseractEngine::processTextRegions(QImage img, QVector<QSharedPointer<rdf::Region>> textRegions){
 
 	// TODO fix coloring of drawn items
-	
-	// drawing for debug reasons
 	QImage result = img.copy();
 	QPainter myPainter(&result);
 	myPainter.setPen(QPen(QBrush(rdf::ColorManager::blue()), 3));
@@ -457,7 +482,6 @@ QImage TesseractEngine::processTextRegions(QImage img, QVector<QSharedPointer<rd
 		}
 
 		// removes isNull() points from polygon - rdf::Rect::fromPoints() method also ignores them
-		// TODO - check for bug when creating polygons with (0,0) points
 		//QPolygon poly = r->polygon().polygon().toPolygon();
 		//for (QPoint p : poly) {
 		//	if (p.isNull())
@@ -636,6 +660,7 @@ void TesseractPluginConfig::load(const QSettings & settings) {
 	mTessdataDir = settings.value("TessdataDir", mTessdataDir).toString();
 	mTextLevel = settings.value("TextLevel", mTextLevel).toInt();
 	mDrawResults = settings.value("DrawResults", mDrawResults).toBool();
+	mSingleLevelOutput = settings.value("SingleLevelOutput", mSingleLevelOutput).toBool();
 }
 
 void TesseractPluginConfig::save(QSettings & settings) const {
@@ -643,6 +668,7 @@ void TesseractPluginConfig::save(QSettings & settings) const {
 	settings.setValue("TessdataDir", mTessdataDir);
 	settings.setValue("TextLevel", mTextLevel);
 	settings.setValue("DrawResults", mDrawResults);
+	settings.setValue("SingleLevelOutput", mSingleLevelOutput);
 }
 
 QString TesseractPluginConfig::TessdataDir() const {
@@ -657,12 +683,17 @@ bool TesseractPluginConfig::drawResults() const {
 	return mDrawResults;
 }
 
+bool TesseractPluginConfig::singleLevelOutput() const {
+	return mSingleLevelOutput;
+}
+
 QString TesseractPluginConfig::toString() const {
 
 	QString msg = rdf::ModuleConfig::toString();
 	msg += "  TessdataDir: " + mTessdataDir;
 	msg += "  TextLevel: " + QString::number(mTextLevel);
 	msg += drawResults() ? " drawing results\n" : " not drawing results\n";
+	msg += singleLevelOutput() ? " single text level exported\n" : " all text levels exported\n";
 
 	return msg;
 }
