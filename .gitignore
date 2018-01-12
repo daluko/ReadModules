@@ -18,3 +18,5 @@ package.xml
 /manuals/Form-Table-Matching-o.pdf
 /manuals/Form-Table-Matching.pdf
 Modules/TesseractOCR/.cppan
+CMakeCache.txt
+/CMakeFiles
