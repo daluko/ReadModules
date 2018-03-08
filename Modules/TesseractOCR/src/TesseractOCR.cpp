@@ -42,6 +42,7 @@ related links:
 #include "PageParser.h"
 #include "Utils.h"
 #include "Drawer.h"
+#include "WhiteSpaceAnalysis.h"
 
 //tesseract
 #include <allheaders.h> // leptonica main header for image io
@@ -49,7 +50,6 @@ related links:
 // openCV
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/highgui.hpp>
 
 #pragma warning(push, 0)	// no warnings from includes - begin
 #include <QAction>
@@ -78,6 +78,7 @@ TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 	menuNames.resize(id_end);
 
 	menuNames[id_perform_ocr] = tr("perform OCR on current image");
+	menuNames[id_white_space_analysis] = tr("white space based layout segmentation");
 	mMenuNames = menuNames.toList();
 
 	// create menu status tips
@@ -85,6 +86,7 @@ TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 	statusTips.resize(id_end);
 
 	statusTips[id_perform_ocr] = tr("Computes optical character recognition results for an image and saves them as a PAGE xml file.");
+	statusTips[id_white_space_analysis] = tr("Computes layout segmentation results based on a white space analysis and saves them as a PAGE xml file.");
 	mMenuStatusTips = statusTips.toList();
 
 	// this line adds the settings to the config
@@ -208,6 +210,56 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 		QString saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
 		parser.write(saveXmlPath, xmlPage);
 	}
+
+	if (runID == mRunIDs[id_white_space_analysis]) {
+
+
+		//get currrent image
+		QImage img = imgC->image();
+		cv::Mat imgCv = nmc::DkImage::qImage2Mat(img);
+
+		rdf::WhiteSpaceAnalysis wsa(imgCv);
+		wsa.compute();
+
+		// load existing XML or create new one
+		QString loadXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath());
+		rdf::PageXmlParser parser;
+		bool xml_found = parser.read(loadXmlPath);
+
+		// set xml header info
+		auto xmlPage = parser.page();
+		xmlPage->setCreator(QString("CVL"));
+		xmlPage->setImageSize(QSize(img.size()));
+		xmlPage->setImageFileName(imgC->fileName());
+
+		//get output path
+		QString saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
+		
+		//create text line or text block output
+		xmlPage->rootRegion()->removeAllChildren();	 //remove current xml content
+		if (mConfig.textLevel()==0) {
+			for (auto tb : wsa.textBlocks()) {
+				xmlPage->rootRegion()->addChild(tb);
+			}
+		}
+		else {
+			for (auto tl : wsa.textLines()) {
+				xmlPage->rootRegion()->addChild(tl);
+			}
+		}
+
+		parser.write(saveXmlPath, xmlPage);
+	
+		// drawing debug image
+		if (mConfig.drawResults()) {
+
+			QImage result = rdf::Image::mat2QImage(wsa.draw(imgCv), true);
+			qDebug() << "Tesseract plugin: Drawing white spaces and corresponding layout segmentation results.";
+			imgC->setImage(result, "visualising white space based layout segmentation");
+		}
+	
+	}
+
 
 	// wrong runID? - do nothing
 	return imgC;

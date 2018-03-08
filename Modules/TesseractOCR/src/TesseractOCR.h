@@ -136,6 +136,7 @@ namespace rdm {
 
 		enum {
 			id_perform_ocr,
+			id_white_space_analysis,
 			id_end
 		};
 
