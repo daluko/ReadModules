@@ -42,7 +42,6 @@ related links:
 #include "PageParser.h"
 #include "Utils.h"
 #include "Drawer.h"
-#include "WhiteSpaceAnalysis.h"
 
 //tesseract
 #include <allheaders.h> // leptonica main header for image io
@@ -94,6 +93,11 @@ TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 	rdf::DefaultSettings s;
 	s.beginGroup(name());
 	mConfig.saveDefaultSettings(s);
+
+	mConfig.saveDefaultSettings(s);
+	rdf::WhiteSpaceAnalysisConfig wsc;
+	wsc.saveDefaultSettings(s);
+
 	s.endGroup();
 }
 /**
@@ -213,14 +217,25 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 
 	if (runID == mRunIDs[id_white_space_analysis]) {
 
-
-		//get currrent image
+		//get currrent imagescale
 		QImage img = imgC->image();
 		cv::Mat imgCv = nmc::DkImage::qImage2Mat(img);
 
 		rdf::WhiteSpaceAnalysis wsa(imgCv);
+		
+		//TODO transfer/set parameters in another way
+		wsa.config()->setDebugDraw(mWsaConfig.debugDraw());
+		wsa.config()->setDebugPath(mWsaConfig.debugPath());
+		wsa.config()->setMaxImgSide(mWsaConfig.maxImgSide());
+		wsa.config()->setMserMaxArea(mWsaConfig.mserMaxArea());
+		wsa.config()->setMserMinArea(mWsaConfig.mserMinArea());
+		wsa.config()->setNumErosionLayers(mWsaConfig.numErosionLayers());
+		wsa.config()->setScaleInput(mWsaConfig.scaleInput());
+		
+		//qDebug() << "wsa.config() debugPath = " << wsa.config()->debugPath();
+		//qDebug() << "wsa.config() maxImgSide = " << QString::number(wsa.config()->maxImgSide());
 		wsa.compute();
-
+		
 		// load existing XML or create new one
 		QString loadXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath());
 		rdf::PageXmlParser parser;
@@ -232,34 +247,44 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 		xmlPage->setImageSize(QSize(img.size()));
 		xmlPage->setImageFileName(imgC->fileName());
 
-		//get output path
+		// set up output xml
 		QString saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
-		
-		//create text line or text block output
-		xmlPage->rootRegion()->removeAllChildren();	 //remove current xml content
-		if (mConfig.textLevel()==0) {
-			for (auto tb : wsa.textBlocks()) {
-				xmlPage->rootRegion()->addChild(tb);
-			}
-		}
-		else {
-			for (auto tl : wsa.textLines()) {
-				xmlPage->rootRegion()->addChild(tl);
-			}
-		}
+		//saveXmlPath = rdf::Utils::createFilePath(saveXmlPath, "-wsa_lines");
 
+		////-------------------------eval xml text block regions
+		saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.inputFilePath());
+
+		xmlPage->rootRegion()->removeAllChildren();
+		for (auto tr : wsa.evalTextBlockRegions()) {
+			xmlPage->rootRegion()->addChild(tr);
+		}
 		parser.write(saveXmlPath, xmlPage);
-	
+
+		////add text line results to page and save as xml
+		//xmlPage->rootRegion()->removeAllChildren();
+		//for (auto tr : wsa.textLineRegions()) {
+		//	xmlPage->rootRegion()->addChild(tr);
+		//}
+		//parser.write(saveXmlPath, xmlPage);
+
+		////write text block results to page and save as xml
+		//saveXmlPath = rdf::PageXmlParser::imagePathToXmlPath(saveInfo.outputFilePath());
+		//saveXmlPath = rdf::Utils::createFilePath(saveXmlPath, "-wsa_block");
+
+		////add results to xml
+		//xmlPage->rootRegion()->removeAllChildren();
+		//xmlPage->rootRegion()->addChild(wsa.textBlockRegions());
+
+		//parser.write(saveXmlPath, xmlPage);
+
 		// drawing debug image
 		if (mConfig.drawResults()) {
 
 			QImage result = rdf::Image::mat2QImage(wsa.draw(imgCv), true);
-			qDebug() << "Tesseract plugin: Drawing white spaces and corresponding layout segmentation results.";
+			qDebug() << "Tesseract plugin: Drawing white segmentation results.";
 			imgC->setImage(result, "visualising white space based layout segmentation");
 		}
-	
 	}
-
 
 	// wrong runID? - do nothing
 	return imgC;
@@ -692,6 +717,7 @@ void TesseractPlugin::loadSettings(QSettings & settings) {
 	// update settings
 	settings.beginGroup(name());
 	mConfig.loadSettings(settings);
+	mWsaConfig.loadSettings(settings);
 	settings.endGroup();
 }
 
@@ -700,6 +726,7 @@ void TesseractPlugin::saveSettings(QSettings & settings) const {
 	// save settings (this is needed for batch profiles)
 	settings.beginGroup(name());
 	mConfig.saveSettings(settings);
+	mWsaConfig.saveSettings(settings);
 	settings.endGroup();
 }
 

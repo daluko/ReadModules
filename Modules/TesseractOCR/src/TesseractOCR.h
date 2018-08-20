@@ -41,6 +41,7 @@ related links:
 #include "Shapes.h"
 #include <QXmlStreamReader>
 #include "ElementsHelper.h"
+#include "WhiteSpaceAnalysis.h"
 
 //tesseract includes
 #include <baseapi.h> // tesseract main header
@@ -147,11 +148,11 @@ namespace rdm {
 		QStringList mMenuStatusTips;
 
 		TesseractPluginConfig mConfig;
+		rdf::WhiteSpaceAnalysisConfig mWsaConfig;
 		QString mModuleName;
 
 		void convertPageResults(tesseract::ResultIterator * ri, const QSharedPointer<rdf::PageElement> xmlPage) const;
 		QVector<QSharedPointer<rdf::Region>> extractTextRegions(const QSharedPointer<rdf::PageElement> xmlPage) const;
-
 		void convertRegion(const tesseract::PageIteratorLevel cil, const tesseract::PageIteratorLevel fil, tesseract::ResultIterator* ri, QSharedPointer<rdf::Region> parent) const;
 		QSharedPointer<rdf::TextRegion> createTextRegion(const tesseract::ResultIterator* ri, const tesseract::PageIteratorLevel level, 
 			const tesseract::PageIteratorLevel outputLevel, bool textAtAllLevels = false) const;
