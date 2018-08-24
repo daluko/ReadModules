@@ -1,5 +1,6 @@
 PROJECT(read-plugins)
 
+
 cmake_minimum_required(VERSION 3.0)
 
 # include macros needed
@@ -13,6 +14,7 @@ OPTION (ENABLE_PAGE_VIS "Compile PAGE Visualization Plugin" ON)
 # OPTION (ENABLE_PAGE_EXTRACTION "Compile Page Extration Plugin" OFF)
 OPTION (ENABLE_BINARIZATION "Compile Page Extration Plugin" ON)
 OPTION (ENABLE_LAYOUT "Compile Layout Analysis Plugin" ON)
+OPTION (ENABLE_DEEP_MERGE "Plugin for DeepMerge (dhSegment)" OFF)
 OPTION (ENABLE_PAGE_XML "PAGE XML Manipulator Plugin" ON)
 OPTION (ENABLE_SKEW "Skew Estimation Plugin" ON)
 OPTION (ENABLE_FORMS "Form Analysis Plugin" ON)
@@ -59,6 +61,10 @@ ENDIF()
 
 IF (ENABLE_LAYOUT)
 	add_subdirectory(Modules/Layout)
+ENDIF()
+
+IF (ENABLE_DEEP_MERGE)
+	add_subdirectory(Modules/DeepMerge)
 ENDIF()
 
 IF (ENABLE_SKEW)

@@ -33,13 +33,7 @@ related links:
 #pragma once
 
 #include "DkPluginInterface.h"
-#include "LineTrace.h"
-#include "SuperPixelTrainer.h"
-#include "SuperPixelClassification.h"
-#include "LayoutAnalysis.h"
-#include "Evaluation.h"
-#include "ScaleFactory.h"
-#include "DkSettingsWidget.h"
+#include "BaseModule.h"
 
 #pragma warning(push, 0)	// no warnings from includes - begin
 #include <QDialog>
@@ -50,87 +44,36 @@ namespace cv {
 	class Mat;
 }
 
-namespace rdf {
-	class LineTrace;
-	class PageXmlParser;
-}
-
 namespace rdm {
 
-class LayoutConfig : public rdf::ModuleConfig {
+class DeepMergeConfig : public rdf::ModuleConfig {
 
 public:
-	LayoutConfig();
-	~LayoutConfig() {};
+	DeepMergeConfig();
+	~DeepMergeConfig() {};
 
 	virtual QString toString() const override;
 
 	bool drawResults() const;
 	bool saveXml() const;
-	bool useTextRegions() const;
 
 protected:
 	
 	bool mDrawResults = false;
-	bool mUseTextRegions = false;
 	bool mSaveXml = true;
 
 	void load(const QSettings& settings) override;
 	void save(QSettings& settings) const override;
 };
 
-class FeatureCollectionInfo : public nmc::DkBatchInfo {
-
-public:
-	FeatureCollectionInfo(const QString& id = QString(), const QString& filePath = QString());
-
-	void setFeatureCollectionManager(const rdf::FeatureCollectionManager& manager);
-	rdf::FeatureCollectionManager featureCollectionManager() const;
-
-private:
-	rdf::FeatureCollectionManager mManager;
-};
-
-class StatsInfo : public nmc::DkBatchInfo {
-
-public:
-	StatsInfo(const QString& id = QString(), const QString& filePath = QString());
-
-	void setEvalInfo(const rdf::EvalInfo& evalInfo);
-	rdf::EvalInfo evalInfo() const;
-
-private:
-	rdf::EvalInfo mEvalInfo;
-};
-
-class SettingsDialog : public QDialog {
-	Q_OBJECT
-
-public:
-	SettingsDialog(const QString& title = tr("Training Settings"), QWidget* parent = 0);
-
-	void setGroupName(const QString& name);
-	QString groupName() const;
-
-public slots:
-	void changeSetting(const QString& key, const QVariant& value, const QStringList& groups);
-	void removeSetting(const QString& key, const QStringList& groups);
-
-protected:
-	nmc::DkSettingsWidget* mSettingsWidget = 0;
-	void createLayout();
-
-	QString mName;
-};
-
-class LayoutPlugin : public QObject, nmc::DkBatchPluginInterface {
+class DeepMergePlugin : public QObject, nmc::DkBatchPluginInterface {
 	Q_OBJECT
 		Q_INTERFACES(nmc::DkBatchPluginInterface)
-		Q_PLUGIN_METADATA(IID "com.nomacs.ImageLounge.LayoutPlugin/3.0" FILE "LayoutPlugin.json")
+		Q_PLUGIN_METADATA(IID "com.nomacs.ImageLounge.DeepMerge/1.0" FILE "DeepMergePlugin.json")
 
 public:
-	LayoutPlugin(QObject* parent = 0);
-	~LayoutPlugin();
+	DeepMergePlugin(QObject* parent = 0);
+	~DeepMergePlugin();
 
 	QImage image() const override;
 
@@ -152,13 +95,8 @@ public:
 	virtual QString name() const override;
 
 	enum {
-		id_layout,
-		//id_text_block,
-		id_lines,
-		id_layout_collect_features,
-		id_layout_train,
-		id_layout_classify,
-		// add actions here
+		id_graph_cut,
+		id_threshold,
 
 		id_end
 	};
@@ -168,21 +106,9 @@ protected:
 	QStringList mRunIDs;
 	QStringList mMenuNames;
 	QStringList mMenuStatusTips;
-
-	rdf::LineTraceConfig mLTRConfig;
-	rdf::SuperPixelLabelerConfig mSplConfig;
-	rdf::SuperPixelClassifierConfig mSpcConfig;
-	rdf::SuperPixelTrainerConfig mSptConfig;
-	rdf::LayoutAnalysisConfig mLAConfig;
-	rdf::ScaleFactoryConfig mSfConfig;
-	LayoutConfig mConfig;
+	DeepMergeConfig mConfig;
 
 	// layout plugin functions
-	cv::Mat compute(const cv::Mat& src, rdf::PageXmlParser& parser) const;
-	cv::Mat computePageSegmentation(const cv::Mat& src, const rdf::PageXmlParser& parser) const;
-	cv::Mat collectFeatures(const cv::Mat& src, const rdf::PageXmlParser& parser, QSharedPointer<FeatureCollectionInfo>& layoutInfo) const;
-	cv::Mat classifyRegions(const cv::Mat& src, const rdf::PageXmlParser& parser, QSharedPointer<StatsInfo>& statsInfo) const;
-	rdf::LineTrace computeLines(QSharedPointer<nmc::DkImageContainer> imgC) const;
-	bool train() const;
+	cv::Mat compute(const cv::Mat& src, cv::Mat& visImg) const;
 };
 };
