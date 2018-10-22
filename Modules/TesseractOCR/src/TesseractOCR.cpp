@@ -78,6 +78,7 @@ TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 
 	menuNames[id_perform_ocr] = tr("perform OCR on current image");
 	menuNames[id_white_space_analysis] = tr("white space based layout segmentation");
+	menuNames[id_text_height_estimation] = tr("text height estimation");
 	mMenuNames = menuNames.toList();
 
 	// create menu status tips
@@ -86,17 +87,21 @@ TesseractPlugin::TesseractPlugin(QObject* parent) : QObject(parent) {
 
 	statusTips[id_perform_ocr] = tr("Computes optical character recognition results for an image and saves them as a PAGE xml file.");
 	statusTips[id_white_space_analysis] = tr("Computes layout segmentation results based on a white space analysis and saves them as a PAGE xml file.");
+	statusTips[id_text_height_estimation] = tr("Computes text height estimation and saves an ouput image visualizing the result.");
 	mMenuStatusTips = statusTips.toList();
 
 	// this line adds the settings to the config
 	// everything else is done by nomacs - so no worries
 	rdf::DefaultSettings s;
 	s.beginGroup(name());
-	mConfig.saveDefaultSettings(s);
 
 	mConfig.saveDefaultSettings(s);
+
 	rdf::WhiteSpaceAnalysisConfig wsc;
 	wsc.saveDefaultSettings(s);
+
+	rdf::TextHeightEstimationConfig thec;
+	thec.saveDefaultSettings(s);
 
 	s.endGroup();
 }
@@ -155,6 +160,23 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 
 	if (runID == mRunIDs[id_perform_ocr]) {
 
+		//Pix *image = pixRead(saveInfo.inputFilePath().toStdString().c_str());
+		//tesseract::TessBaseAPI *api = new tesseract::TessBaseAPI();
+
+		//if (api->Init(mConfig.TessdataDir().toStdString().c_str(), "eng")) {
+		//	qInfo() <<  "Could not initialize tesseract.";
+		//	qInfo() << "tessdata dir" << mConfig.TessdataDir();
+		//	return imgC; 
+		//}
+
+		//api->SetImage(image);
+		//api->Recognize(0);
+		//char * outText;
+		//outText = api->GetUTF8Text();
+
+		//qInfo() << "outText: ";
+		//qInfo() << outText;
+
 		//get currrent image
 		QImage img = imgC->image();
 
@@ -173,12 +195,11 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 		TesseractEngine tessEngine;
 		bool initialized = tessEngine.init(mConfig.TessdataDir());
 
-		if (!initialized) {
+		if (!initialized)
 			return imgC;
-		}
 		
 		if (!xml_found) {
-
+			
 			qInfo() << "Tesseract plugin: OCR on current image";
 			rdf::Timer dt;
 
@@ -186,9 +207,12 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 			tesseract::ResultIterator* pageResults;
 			pageResults = tessEngine.processPage(img);
 
+			qInfo() << "Tesseract plugin: Finished computing tessract results.";
+
 			// convert results to PAGE xml regions
 			convertPageResults(pageResults, xmlPage);
 
+			qInfo() << "Tesseract plugin: Successfully converted results to PAGE xml.";
 			qInfo() << "Tesseract plugin: OCR results computed in" << dt;
 		}
 		else {
@@ -223,17 +247,12 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 
 		rdf::WhiteSpaceAnalysis wsa(imgCv);
 		
-		//TODO transfer/set parameters in another way
-		wsa.config()->setDebugDraw(mWsaConfig.debugDraw());
-		wsa.config()->setDebugPath(mWsaConfig.debugPath());
-		wsa.config()->setMaxImgSide(mWsaConfig.maxImgSide());
-		wsa.config()->setMserMaxArea(mWsaConfig.mserMaxArea());
-		wsa.config()->setMserMinArea(mWsaConfig.mserMinArea());
-		wsa.config()->setNumErosionLayers(mWsaConfig.numErosionLayers());
-		wsa.config()->setScaleInput(mWsaConfig.scaleInput());
-		
-		//qDebug() << "wsa.config() debugPath = " << wsa.config()->debugPath();
-		//qDebug() << "wsa.config() maxImgSide = " << QString::number(wsa.config()->maxImgSide());
+		wsa.setConfig(QSharedPointer<rdf::WhiteSpaceAnalysisConfig>(new rdf::WhiteSpaceAnalysisConfig(mWsaConfig)));
+		if (wsa.config()->debugDraw()) {
+			if (wsa.config()->debugPath().isEmpty())
+				wsa.config()->setDebugPath(saveInfo.inputFilePath());
+		}
+
 		wsa.compute();
 		
 		// load existing XML or create new one
@@ -279,10 +298,36 @@ QSharedPointer<nmc::DkImageContainer> TesseractPlugin::runPlugin(
 
 		// drawing debug image
 		if (mConfig.drawResults()) {
-
 			QImage result = rdf::Image::mat2QImage(wsa.draw(imgCv), true);
 			qDebug() << "Tesseract plugin: Drawing white segmentation results.";
 			imgC->setImage(result, "visualising white space based layout segmentation");
+		}
+	}
+
+	if (runID == mRunIDs[id_text_height_estimation]) {
+
+		//get currrent imagescale
+		QImage img = imgC->image();
+		cv::Mat imgCv = rdf::Image::qImage2Mat(img);
+
+		qDebug() << "Running text height estimation test...";
+
+		rdf::TextHeightEstimation the(imgCv);
+		the.setConfig(QSharedPointer<rdf::TextHeightEstimationConfig>(new rdf::TextHeightEstimationConfig(mTheConfig)));
+
+		if (!the.compute()) {
+			qWarning() << "Computation of text height estimation failed.";
+		}
+
+		if (the.config()->debugDraw()) {
+			qInfo() << "Tesseract plugin: Drawing debug images for text height estimation.";
+			the.drawDebugImages(saveInfo.outputFilePath());
+		}
+
+		if (mConfig.drawResults()) {
+			QImage result = rdf::Image::mat2QImage(the.draw(imgCv), true);
+			qInfo() << "Tesseract plugin: Drawing text height estimation results.";
+			imgC->setImage(result, "visualising text height estimation results");
 		}
 	}
 
@@ -499,13 +544,12 @@ bool TesseractEngine::init(const QString tessdataDir) {
 
 	// TODO allow different languages
 	char * lang = "eng";
-
-	if (mTessAPI->Init(tessdataDir.toStdString().c_str(), lang)==-1)
-	{
+	
+	qInfo() << "Using tesseract version " << mTessAPI->Version();
+	if (mTessAPI->Init(tessdataDir.toStdString().c_str(), lang)==-1){
 		qWarning() << "Tesseract plugin: Could not initialize tesseract API!";
-		qWarning() << "Tesseract plugin: Set path to directory containing \"tessdata\" folder using config plugin!";
+		qWarning() << "Tesseract plugin: Set path to tessdata folder using config plugin!";
 		qWarning() << "Tesseract plugin: If tessdata folder is missing, create it and download eng.traineddata from github https:\\\\github.com\\tesseract-ocr\\tessdata";
-
 		return false;
 	}
 	else {
@@ -529,13 +573,11 @@ void TesseractEngine::setRectangle(const rdf::Rect rect) {
 }
 
 tesseract::ResultIterator* TesseractEngine::processPage(const QImage img) {
-
 	setImage(img);
-	
+
 	//set tess parameters
 	mTessAPI->SetPageSegMode(tesseract::PageSegMode::PSM_AUTO);
 	mTessAPI->SetVariable("save_best_choices", "T");
-
 	mTessAPI->Recognize(0);
 
 	tesseract::ResultIterator* ri = mTessAPI->GetIterator();
@@ -551,7 +593,6 @@ QImage TesseractEngine::processTextRegions(QImage img, QVector<QSharedPointer<rd
 	myPainter.setPen(QPen(QBrush(rdf::ColorManager::blue()), 3));
 	myPainter.setBrush(Qt::NoBrush);
 
-	//for (int i = 0; i < tBoxes.size(); ++i) {
 	for (auto r : textRegions) {
 		
 		if (r.isNull()) {
@@ -621,10 +662,8 @@ QImage TesseractEngine::getRegionImage(const QImage img, const QSharedPointer<rd
 
 	// check for axis aligned rect
 	
-	// TODO test results and find out if there is a better method for masking a polygonal area
-	
+	// TODO test results and find out if there is a better method for masking a polygonal area	
 	// TODO check why img.format() results in black background sometimes
-	//QImage regionImg = QImage(img.size(), img.format());
 	QImage regionImg = QImage(img.size(), QImage::Format_RGB32);
 	regionImg.fill(fillColor);
 
@@ -637,21 +676,10 @@ QImage TesseractEngine::getRegionImage(const QImage img, const QSharedPointer<rd
 	QImage croppedRI = regionImg.copy(regionRect.toQRect());
 
 	// debug ocr images
-	//cv::Mat cri = nmc::DkImage::qImage2Mat(croppedRI);
-	//cv::Mat ri = nmc::DkImage::qImage2Mat(regionImg);
-	//cv::String winName1 = "image of the cropped text region ";
-	//cv::String winName2 = "image of masked text region";
-	//winName1 = winName1 + region->id().toStdString();
-	//winName2 = winName2 + region->id().toStdString();
-	//
-	//cv::namedWindow(winName1, cv::WINDOW_AUTOSIZE);// Create a window for display.
-	//cv::imshow(winName1, cri);
-
-	//cv::namedWindow(winName2, cv::WINDOW_AUTOSIZE);// Create a window for display.
-	//cv::imshow(winName2, ri);
+	//cv::Mat cri = rdf::Image::qImage2Mat(croppedRI);
+	//cv::Mat ri = rdf::Image::qImage2Mat(regionImg);
 	
 	return croppedRI;
-
 }
 
 rdf::Rect TesseractEngine::polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const {
@@ -718,6 +746,7 @@ void TesseractPlugin::loadSettings(QSettings & settings) {
 	settings.beginGroup(name());
 	mConfig.loadSettings(settings);
 	mWsaConfig.loadSettings(settings);
+	mTheConfig.loadSettings(settings);
 	settings.endGroup();
 }
 
@@ -727,6 +756,7 @@ void TesseractPlugin::saveSettings(QSettings & settings) const {
 	settings.beginGroup(name());
 	mConfig.saveSettings(settings);
 	mWsaConfig.saveSettings(settings);
+	mTheConfig.saveSettings(settings);
 	settings.endGroup();
 }
 

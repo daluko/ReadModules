@@ -42,6 +42,7 @@ related links:
 #include <QXmlStreamReader>
 #include "ElementsHelper.h"
 #include "WhiteSpaceAnalysis.h"
+#include "TextHeightEstimation.h"
 
 //tesseract includes
 #include <baseapi.h> // tesseract main header
@@ -95,17 +96,16 @@ namespace rdm {
 			bool init(const QString tessdataDir);
 			tesseract::ResultIterator* processPage(const QImage img);
 			QImage processTextRegions(QImage img, QVector<QSharedPointer<rdf::Region>> textRegions);
-
 			QImage getRegionImage(const QImage img, const QSharedPointer<rdf::Region>, const QColor fillColor = QColor(Qt::white)) const;
 			void addTextToRegion(const QImage img, QSharedPointer<rdf::Region> region, 
 				const rdf::Rect regionRect = rdf::Rect(), const tesseract::PageSegMode psm = tesseract::PageSegMode::PSM_AUTO);
 			rdf::Rect polygonToOCRBox(const QSize imgSize, const rdf::Polygon poly) const;
-			bool isAARect(rdf::Polygon poly);
 
 		private:
 			tesseract::TessBaseAPI* mTessAPI;
 			void setImage(const QImage img);
 			void setRectangle(const rdf::Rect rect);
+			bool isAARect(rdf::Polygon poly);
 	};
 
 	class TesseractPlugin : public QObject, nmc::DkBatchPluginInterface {
@@ -138,6 +138,7 @@ namespace rdm {
 		enum {
 			id_perform_ocr,
 			id_white_space_analysis,
+			id_text_height_estimation,
 			id_end
 		};
 
@@ -149,6 +150,7 @@ namespace rdm {
 
 		TesseractPluginConfig mConfig;
 		rdf::WhiteSpaceAnalysisConfig mWsaConfig;
+		rdf::TextHeightEstimationConfig mTheConfig;
 		QString mModuleName;
 
 		void convertPageResults(tesseract::ResultIterator * ri, const QSharedPointer<rdf::PageElement> xmlPage) const;
